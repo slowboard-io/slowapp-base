@@ -1,0 +1,117 @@
+# Every push and PR: the kit, SDK and example tests on the runner and inside the images, the
+# example app through the fixture runner twice, and both images built for the board (armv7, under
+# QEMU) so a broken apt install shows up before a release.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"     # trixie's Python
+
+      - run: pip install pillow jsonschema
+
+      - name: Unit tests (runner)
+        env:
+          PYTHONPATH: kit:sdk:example
+        run: |
+          python -m unittest discover -v -s kit/tests
+          python -m unittest discover -v -s sdk/tests
+          python -m unittest discover -v -s example/tests
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Images (amd64)
+        run: |
+          docker buildx build --load -f images/python/Dockerfile -t slowapp-python:dev .
+          docker buildx build --load -f images/python-sci/Dockerfile --build-arg BASE=slowapp-python:dev -t slowapp-python-sci:dev .
+          docker buildx build --load -f example/Dockerfile --build-arg BASE=slowapp-python:dev -t slowapp-example:dev example
+          docker image ls 'slowapp-*'
+
+      - name: Unit tests (inside the images)
+        run: |
+          docker run --rm -v "$PWD:/src:ro" -w /src -e PYTHONPATH=/opt/slowapp:/src/example slowapp-python:dev \
+            sh -c 'python3 -m unittest discover -s kit/tests && python3 -m unittest discover -s sdk/tests && python3 -m unittest discover -s example/tests'
+          docker run --rm slowapp-python-sci:dev python3 -c '
+          import os, numpy, slowapp_kit
+          for v in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS"):
+              assert os.environ.get(v) == "1", f"{v}={os.environ.get(v)!r}"
+          print("sci ok, numpy", numpy.__version__)'
+
+      - name: Example app in fixture mode (twice)
+        env:
+          PYTHONPATH: kit:sdk
+          SLOWAPP_ENGINE: docker
+        run: python -m slowapp_sdk fixture example --image slowapp-example:dev --repeat --out out/previews
+
+      - name: Report
+        if: always()
+        run: '[ -f out/previews/report.md ] && cat out/previews/report.md >> "$GITHUB_STEP_SUMMARY" || true'
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: previews
+          path: out/previews/
+          if-no-files-found: warn
+          retention-days: 14
+
+  armv7:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    # A local registry: the buildx container builder can't see `docker load`ed images, so the slim
+    # image goes here and the sci build pulls it FROM localhost, as the release pulls it from GHCR.
+    services:
+      registry:
+        image: registry:2
+        ports: ["5000:5000"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-qemu-action@v4
+        with:
+          platforms: arm
+      - uses: docker/setup-buildx-action@v4
+        with:
+          driver-opts: network=host
+      - name: slowapp-python (linux/arm/v7)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: images/python/Dockerfile
+          platforms: linux/arm/v7
+          tags: localhost:5000/slowapp-python:ci
+          push: true
+          cache-from: type=gha,scope=python-armv7
+          cache-to: type=gha,scope=python-armv7,mode=max
+      - name: slowapp-python-sci (linux/arm/v7)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: images/python-sci/Dockerfile
+          platforms: linux/arm/v7
+          build-args: BASE=localhost:5000/slowapp-python:ci
+          tags: localhost:5000/slowapp-python-sci:ci
+          push: true
+          cache-from: type=gha,scope=sci-armv7
+          cache-to: type=gha,scope=sci-armv7,mode=max
+      - name: Kit tests on armv7
+        run: |
+          docker run --rm --platform linux/arm/v7 -v "$PWD:/src:ro" -w /src -e PYTHONPATH=/opt/slowapp \
+            localhost:5000/slowapp-python:ci python3 -m unittest discover -s kit/tests

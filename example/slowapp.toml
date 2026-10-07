@@ -1,0 +1,37 @@
+# The example slowapp: the moon's phase for the middle third. No network, no secrets, no data:
+# everything is computed from the time, so fixture mode needs nothing but `now`.
+[app]
+id = "moon"
+title = "Moon"
+contract = 3
+image = "ghcr.io/mike-anderson/slowapp-example"
+memory = "48m"
+tmp = "8m"
+timeout_s = 30
+network = "none"
+
+[settings]
+south = { type = "boolean", default = false, label = "Southern hemisphere (the lit side flips)" }
+
+[[job]]
+name = "render"
+expected_s = 3
+
+[[feed]]
+name = "phase"
+size = "slot"
+
+[[example]]
+name = "today"
+caption = "7 Oct 2026: a waning crescent, new moon on the 10th"
+fixture = "fixtures/default"
+now = "2026-10-07T09:00:00-07:00"
+feeds = { phase = "456x444.k4" }
+
+[[example]]
+name = "south"
+caption = "The same moon from the southern hemisphere"
+fixture = "fixtures/default"
+now = "2026-10-07T09:00:00-07:00"
+settings = { south = true }
+feeds = { phase = "456x444.k4" }

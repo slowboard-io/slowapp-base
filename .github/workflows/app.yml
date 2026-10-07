@@ -1,0 +1,180 @@
+# The reusable workflow every slowapp repo calls (see README). It takes the SDK from the base image
+# the app's Dockerfile pins, so an app is always checked by the tools of the base it builds on:
+#
+#   validate slowapp.toml → unit tests inside the base → build (amd64) → every [[example]] in
+#   fixture mode, twice → previews as an artifact and in the job summary → an armv7 build for the
+#   board → on a vX.Y.Z tag, push X.Y.Z / X.Y / X for armv7, arm64 and amd64 and put the digest the
+#   hub should pin in the release notes.
+#
+# Caller:
+#   jobs:
+#     app:
+#       uses: mike-anderson/slowapp-base/.github/workflows/app.yml@v1.0.0   # Dependabot bumps it
+#       permissions: { contents: write, packages: write }
+name: app
+
+on:
+  workflow_call:
+    inputs:
+      image:
+        description: "Image name under ghcr.io/<owner>/ (default: the repo name)"
+        type: string
+        default: ""
+      platforms:
+        type: string
+        default: linux/arm/v7,linux/arm64,linux/amd64
+      tests:
+        description: "Unit test directory, run with unittest inside the base image (skipped if missing)"
+        type: string
+        default: tests
+      fixture-timeout-scale:
+        type: string
+        default: "1"
+    outputs:
+      digest:
+        description: "The pushed image's digest (tag builds only)"
+        value: ${{ jobs.publish.outputs.digest }}
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Base image and SDK
+        id: base
+        run: |
+          base=$(awk 'toupper($1) == "FROM" { print $2; exit }' Dockerfile)
+          [ -n "$base" ] || { echo "no FROM in Dockerfile"; exit 1; }
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "base: $base"
+          docker pull -q "$base"
+          cid=$(docker create "$base")
+          docker cp "$cid:/opt/slowapp" "$RUNNER_TEMP/slowapp"
+          docker rm "$cid" >/dev/null
+          echo "PYTHONPATH=$RUNNER_TEMP/slowapp" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"     # trixie's Python
+      - run: pip install pillow
+
+      - name: Validate slowapp.toml
+        run: python -m slowapp_sdk validate
+
+      - name: Unit tests (inside the base)
+        if: hashFiles(format('{0}/**/*.py', inputs.tests)) != ''
+        env:
+          BASE: ${{ steps.base.outputs.base }}
+          TESTS: ${{ inputs.tests }}
+        run: |
+          docker run --rm -v "$PWD:/src:ro" -w /src -e PYTHONPATH=/src:/opt/slowapp "$BASE" \
+            python3 -m unittest discover -v -s "$TESTS"
+
+      - uses: docker/setup-buildx-action@v4
+        with:
+          driver: docker      # the fixture runner runs the image this step loads
+
+      - name: Build (amd64)
+        run: docker buildx build --load -t app:ci .
+
+      - name: Examples in fixture mode (twice)
+        env:
+          SLOWAPP_ENGINE: docker
+          SLOWAPP_TIMEOUT_SCALE: ${{ inputs.fixture-timeout-scale }}
+        run: python -m slowapp_sdk fixture --image app:ci --repeat --out out/previews
+
+      - name: Report
+        if: always()
+        run: '[ -f out/previews/report.md ] && cat out/previews/report.md >> "$GITHUB_STEP_SUMMARY" || true'
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: previews
+          path: out/previews/
+          if-no-files-found: warn
+          retention-days: 14
+
+  armv7:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-qemu-action@v4
+        with:
+          platforms: arm
+      - uses: docker/setup-buildx-action@v4
+      - name: Build for the board (linux/arm/v7)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/arm/v7
+          push: false
+          cache-from: type=gha,scope=app-armv7
+          cache-to: type=gha,scope=app-armv7,mode=max
+
+  publish:
+    needs: [test, armv7]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      packages: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Version and name
+        id: v
+        env:
+          IMAGE: ${{ inputs.image }}
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          [[ "$v" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || { echo "tag $GITHUB_REF_NAME is not vX.Y.Z"; exit 1; }
+          name="${IMAGE:-${GITHUB_REPOSITORY#*/}}"
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "ref=ghcr.io/$owner/$name" >> "$GITHUB_OUTPUT"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "minor=${BASH_REMATCH[1]}.${BASH_REMATCH[2]}" >> "$GITHUB_OUTPUT"
+          echo "major=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push
+        id: push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: ${{ inputs.platforms }}
+          push: true
+          labels: org.opencontainers.image.version=${{ steps.v.outputs.version }}
+          tags: |
+            ${{ steps.v.outputs.ref }}:${{ steps.v.outputs.version }}
+            ${{ steps.v.outputs.ref }}:${{ steps.v.outputs.minor }}
+            ${{ steps.v.outputs.ref }}:${{ steps.v.outputs.major }}
+          cache-from: type=gha,scope=app-release
+          cache-to: type=gha,scope=app-release,mode=max
+      - name: Release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ steps.v.outputs.ref }}
+          V: ${{ steps.v.outputs.version }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          printf 'Pin in slowbhub.toml:\n\n```toml\nimage = "%s@%s"   # %s\n```\n' "$REF" "$DIGEST" "$V" > notes.md
+          cat notes.md >> "$GITHUB_STEP_SUMMARY"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release edit "$GITHUB_REF_NAME" --notes-file notes.md
+          else
+            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file notes.md
+          fi
