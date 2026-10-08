@@ -89,6 +89,18 @@ class Prompts(unittest.TestCase):
             self.assertEqual(sorted(res["prompts"]["cards"]), ["p1.own.tap", "p1.spare.tap"])
             self.assertEqual(rf.frame(res).size, (1360, 480))
 
+    def test_question_card(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self.write(root)
+            doc = json.loads((root / "prompts.json").read_text())
+            doc["prompts"][0]["ask"] = "prompts/p1/ask.png"
+            (root / "prompts.json").write_text(json.dumps(doc))
+            with self.assertRaises(rf.Fail):                    # declared but not written
+                rf.check_out(root, self.EX)
+            (root / "prompts" / "p1" / "ask.png").write_bytes(encode_png(Image.new("RGB", (452, 444), (255, 255, 255))))
+            self.assertIn("p1.ask", rf.check_out(root, self.EX)["prompts"]["cards"])
+
     def test_bad(self):
         for kw in (dict(size=(400, 444)), dict(surface="456x444.k4"), dict(until="2026-10-06T08:00:00-07:00")):
             with tempfile.TemporaryDirectory() as d:

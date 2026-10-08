@@ -124,6 +124,10 @@ The full tables are docs/SLOWBOARD.md §8.2–§8.4; `slowapp_kit` reads all of 
 - **Mounts:** `/data` (rw; ro fixture copy), `/out`, `/in` (ro), `/tmp` and `/cache` (tmpfs),
   `/run/secrets/<name>` (ro, live only), `/run/sb` (`ui.sock`, and `ui.log`: the UI's stderr and
   its job children's, kept as a 256 KB ring by the kit). The root filesystem is read-only.
+- **Prompts** (the `prompts` grant): `/out/prompts.json`, each prompt's answers as
+  `prompts/<id>/<binding>.png`, and optionally its question card `prompts/<id>/ask.png`
+  (`"ask"` in prompts.json). With a question card the prompt takes its slot's whole body and the
+  strip shows only the answers; without one the question goes in the strip.
 - **Output:** `/out/feeds/<feed>/deck.json` and `cards/<id>.png` (exact surface size, 2- or 8-bit
   indexed, PLTE within the inks, no tRNS, ≤ 256 KB, ≤ 32 cards), plus optional `prompts.json`,
   `summary.json`, `cache_key`, `timing.json` and the kit's `.metrics.json`.

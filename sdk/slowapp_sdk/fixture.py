@@ -208,6 +208,16 @@ def check_prompts(out, surface, size):
             raise Fail(f"prompts/{pid}: from / until need offsets and until > from")
         if not p.get("question"):
             raise Fail(f"prompts/{pid}: no question")
+        if p.get("ask") is not None:
+            want = f"prompts/{pid}/ask.png"
+            if p["ask"] != want:
+                raise Fail(f"prompts/{pid}: ask must be {want}")
+            try:
+                rgb = check_png((out / want).read_bytes(), size)
+            except (OSError, InkError) as e:
+                raise Fail(f"prompts/{pid}.ask: {e}")
+            got[f"{pid}.ask"] = (rgb, blob_id(rgb))
+            cards.append({"id": f"{pid}.ask", "title": p["question"]})
         bindings = p.get("bindings") or {}
         if not bindings or not set(bindings) <= set(BINDINGS):
             raise Fail(f"prompts/{pid}: bindings {sorted(bindings)} (1-4 of {', '.join(BINDINGS)})")
