@@ -65,5 +65,33 @@ class CheckOut(unittest.TestCase):
                 rf.check_out(Path(d), EXAMPLE)
 
 
+class Prompts(unittest.TestCase):
+    def write(self, root, size=(452, 444), surface="452x444.k4", until="2026-10-06T18:00:00-07:00"):
+        (root / "prompts" / "p1").mkdir(parents=True)
+        bindings = {}
+        for name in ("own.tap", "spare.tap"):
+            (root / "prompts" / "p1" / f"{name}.png").write_bytes(encode_png(Image.new("RGB", size, (255, 255, 255))))
+            bindings[name] = {"show": f"prompts/p1/{name}.png", "strip": "ok", "emit": {"kind": "answer", "data": {}}}
+        (root / "prompts.json").write_text(json.dumps({"surface": surface, "prompts": [
+            {"id": "p1", "question": "Water the plants?", "from": "2026-10-06T09:00:00-07:00", "until": until,
+             "bindings": bindings}]}))
+
+    EX = {"name": "x", "fixture": "fixtures/x", "now": "2026-10-06T10:00:00-07:00", "feeds": {"prompts": "452x444.k4"}}
+
+    def test_good(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.write(Path(d))
+            res = rf.check_out(Path(d), self.EX)
+            self.assertEqual(sorted(res["prompts"]["cards"]), ["p1.own.tap", "p1.spare.tap"])
+            self.assertEqual(rf.frame(res).size, (1360, 480))
+
+    def test_bad(self):
+        for kw in (dict(size=(400, 444)), dict(surface="456x444.k4"), dict(until="2026-10-06T08:00:00-07:00")):
+            with tempfile.TemporaryDirectory() as d:
+                self.write(Path(d), **kw)
+                with self.assertRaises(rf.Fail):
+                    rf.check_out(Path(d), self.EX)
+
+
 if __name__ == "__main__":
     unittest.main()

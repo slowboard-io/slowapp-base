@@ -139,6 +139,9 @@ def check_out(out, example):
     res = {}
     for feed, surface in example["feeds"].items():
         size = tuple(int(v) for v in surface.split(".")[0].split("x"))
+        if feed == "prompts":
+            res[feed] = check_prompts(out, surface, size)
+            continue
         root = out / "feeds" / feed
         try:
             deck = json.loads((root / "deck.json").read_text())
@@ -172,10 +175,52 @@ def check_out(out, example):
     return res
 
 
+BINDINGS = ("own.tap", "spare.tap", "own.hold", "spare.hold")
+
+
+def check_prompts(out, surface, size):
+    """The prompts grant's output: /out/prompts.json and each binding's body. Returned in the
+    deck shape (one pseudo-card per binding, `<instance>.<binding>`) so previews and the report
+    treat it like a feed; frame() leaves it out (prompts are overlays, not a slot's home)."""
+    try:
+        doc = json.loads((out / "prompts.json").read_text())
+    except (OSError, ValueError) as e:
+        raise Fail(f"prompts: prompts.json: {e}")
+    if doc.get("surface") != surface:
+        raise Fail(f"prompts: surface {doc.get('surface')!r}, the example asks {surface}")
+    prompts = doc.get("prompts")
+    if not isinstance(prompts, list) or len(prompts) > 8:
+        raise Fail("prompts: prompts.json needs a list of at most 8 prompts")
+    cards, got = [], {}
+    for p in prompts:
+        pid = p.get("id", "?")
+        try:
+            vf, vu = (datetime.fromisoformat(p[k]) for k in ("from", "until"))
+        except (KeyError, TypeError, ValueError) as e:
+            raise Fail(f"prompts/{pid}: from / until: {e}")
+        if vf.tzinfo is None or vu.tzinfo is None or vu <= vf:
+            raise Fail(f"prompts/{pid}: from / until need offsets and until > from")
+        if not p.get("question"):
+            raise Fail(f"prompts/{pid}: no question")
+        bindings = p.get("bindings") or {}
+        if not bindings or not set(bindings) <= set(BINDINGS):
+            raise Fail(f"prompts/{pid}: bindings {sorted(bindings)} (1-4 of {', '.join(BINDINGS)})")
+        for name, b in bindings.items():
+            cid = f"{pid}.{name}"
+            try:
+                rgb = check_png((out / b["show"]).read_bytes(), size)
+            except (OSError, InkError, KeyError) as e:
+                raise Fail(f"prompts/{cid}: {e}")
+            got[cid] = (rgb, blob_id(rgb))
+            cards.append({"id": cid, "title": f"{p['question']} → {b.get('strip') or name}"})
+    return {"deck": {"cards": cards}, "cards": got, "prompts": True}
+
+
 def frame(res):
     """Home cards spliced into a white full frame, strips left blank (slowbd draws them). A feed
     named after a slot goes there; any other takes the next free slot whose width matches."""
     img = Image.new("RGB", (PANEL_W, PANEL_H), (255, 255, 255))
+    res = {f: r for f, r in res.items() if not r.get("prompts")}
     free = list(SLOTS)
     placed = {f: f for f in res if f in SLOTS}
     for f in placed:
