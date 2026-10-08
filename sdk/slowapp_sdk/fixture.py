@@ -15,6 +15,7 @@ The engine is podman if installed, else docker (SLOWAPP_ENGINE overrides). SLOWA
 SLOWAPP_TIMEOUT_SCALE stretches the manifest's timeout for it. Needs Pillow.
 """
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -36,6 +37,11 @@ SLOTS = {"left": (0, "red"), "middle": (452, "yellow"), "right": (908, "black")}
 SLOT_W = {"left": 452, "middle": 456, "right": 452}
 PANEL_W, PANEL_H, STRIP_H = 1360, 480, 36
 EXIT_NAMES = {0: "ok", 3: "unchanged", 4: "transient", 5: "needs config", 64: "contract error", 137: "killed"}
+
+
+def safe_file(name):
+    """A preview file name CI artifacts accept: prompt instance ids carry times (`:`)."""
+    return re.sub(r"[^A-Za-z0-9._-]", "_", name)
 
 
 class Fail(Exception):
@@ -269,7 +275,7 @@ def cmd_test(a):
             files = []
             for f, x in res.items():
                 for cid, (img, _) in x["cards"].items():
-                    fn = f"{app}-{ex['name']}-{f}-{cid}.png"
+                    fn = safe_file(f"{app}-{ex['name']}-{f}-{cid}.png")
                     img.save(out_dir / fn)
                     files.append(fn)
             fn = f"{app}-{ex['name']}-frame.png"

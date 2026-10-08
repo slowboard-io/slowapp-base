@@ -78,6 +78,10 @@ class Prompts(unittest.TestCase):
 
     EX = {"name": "x", "fixture": "fixtures/x", "now": "2026-10-06T10:00:00-07:00", "feeds": {"prompts": "452x444.k4"}}
 
+    def test_preview_names_are_artifact_safe(self):
+        self.assertEqual(rf.safe_file("r-due-prompts-a1@2026-10-06T09:00.own.tap.png"),
+                         "r-due-prompts-a1_2026-10-06T09_00.own.tap.png")
+
     def test_good(self):
         with tempfile.TemporaryDirectory() as d:
             self.write(Path(d))
