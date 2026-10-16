@@ -201,6 +201,41 @@ class Output(Env):
             c.write_prompts([self.prompt(), self.prompt()])             # duplicate id
 
 
+class Contract4(Env):
+    """Docs, args and results (app UIs)."""
+
+    def test_both_contracts_and_no_other(self):
+        self.assertEqual(self.ctx(SLOWAPP_CONTRACT="3").app, self.ctx(SLOWAPP_CONTRACT="4").app)
+        with self.assertRaises(kit.ContractError):
+            self.ctx(SLOWAPP_CONTRACT="5")
+
+    def test_args_and_docs_from_in(self):
+        ctx = self.ctx()
+        self.assertEqual((ctx.args, ctx.docs, ctx.doc("tags", {})), ({}, {}, {}))
+        inp = Path(self.env["SLOWAPP_IN"])
+        (inp / "docs").mkdir(parents=True, exist_ok=True)
+        (inp / "args.json").write_text('{"url": "https://x"}')
+        (inp / "docs" / "tags.json").write_text('{"work": "important"}')
+        ctx = self.ctx()
+        self.assertEqual(ctx.args, {"url": "https://x"})
+        self.assertEqual(ctx.docs, {"tags": {"work": "important"}})
+        self.assertEqual(ctx.doc("tags"), {"work": "important"})
+
+    def test_write_doc_and_result(self):
+        ctx = self.ctx()
+        ctx.manifest = {"docs": {"tags": {}, "notes": {"writer": "ui"}}}
+        ctx.write_doc("tags", {"a": 1})
+        ctx.result({"ok": True, "n": 2})
+        out = Path(self.env["SLOWAPP_OUT"])
+        self.assertEqual(json.loads((out / "docs" / "tags.json").read_text()), {"a": 1})
+        self.assertEqual(json.loads((out / "result.json").read_text()), {"ok": True, "n": 2})
+        for bad in ("notes", "other", "Bad-Name"):
+            with self.assertRaises(kit.ContractError, msg=bad):
+                ctx.write_doc(bad, 1)
+        with self.assertRaises(kit.ContractError):
+            ctx.result("x" * (300 * 1024))
+
+
 class Net(Env):
     def test_secret_honours_fixture_mode(self):
         self.assertEqual(self.ctx(SLOWAPP_MODE="fixture").secret("token"), "fixture-token")

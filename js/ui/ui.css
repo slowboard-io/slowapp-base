@@ -1,0 +1,67 @@
+/* @slowboard/ui: an app UI that looks like the hub around it. tokens.css is slowboard.io's,
+   unchanged (as the hub uses it); the roles below are the hub's (crates/slowhub/web/app.css).
+   The hub sends its live colours at connect and on every theme change (app.applyTheme sets them
+   on <html>), so these are only the starting point. Fonts are inlined into the single-file
+   bundle: the sandboxed frame can't fetch the hub's. */
+@import "./tokens.css";
+
+@font-face { font-family: "Chivo Variable"; src: url("./fonts/chivo-latin-wght-normal.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: "Press Start 2P"; src: url("./fonts/press-start-2p-latin-400-normal.woff2") format("woff2"); font-display: swap; }
+@font-face { font-family: "Silkscreen"; src: url("./fonts/silkscreen-latin-400-normal.woff2") format("woff2"); font-display: swap; }
+@font-face { font-family: "VT323"; src: url("./fonts/vt323-latin-400-normal.woff2") format("woff2"); font-display: swap; }
+
+:root { --muted: #4a4a4a; --wash: #f3f3f1; --solid: var(--ink-black); --on-solid: var(--ink-white); color-scheme: light; }
+:root[data-theme="dark"] {
+  --paper: #141414; --text: #f1f0ec; --keyline: #f1f0ec; --muted: #b3b1aa; --wash: #222222;
+  --solid: #f1f0ec; --on-solid: #141414; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; background: var(--paper); color: var(--text); }
+body { font: var(--step-0)/1.45 var(--font-body); padding: var(--s1); }
+:focus-visible { outline: 3px solid var(--mark); outline-offset: 2px; }
+
+.sb-stack { display: grid; gap: var(--s1); align-content: start; }
+.sb-row { display: flex; flex-wrap: wrap; gap: var(--s0); align-items: center; }
+.sb-title { font: var(--step-1)/1.2 var(--font-display); margin: 0; }
+.sb-hint { color: var(--muted); font-size: var(--step--1); margin: 0; }
+
+.sb-card { border: var(--line-thin) solid var(--keyline); padding: 14px 16px; display: grid; gap: 10px; align-content: start; min-width: 0; }
+.sb-card > h2 { font: 0.95rem/1.2 var(--font-button); text-transform: uppercase; letter-spacing: 0.04em; margin: 0; }
+
+.sb-btn { font: 0.9rem/1.2 var(--font-button); padding: 8px 12px; border: var(--line-thin) solid var(--keyline); background: var(--paper); color: var(--text); cursor: pointer; border-radius: 0; text-decoration: none; display: inline-block; }
+.sb-btn--solid { background: var(--solid); color: var(--on-solid); }
+.sb-btn--red { background: var(--ink-red); color: var(--ink-white); border-color: var(--ink-red); }
+.sb-btn--quiet { border-color: transparent; text-decoration: underline; text-underline-offset: 3px; }
+.sb-btn:disabled { opacity: 0.5; cursor: default; }
+
+.sb-field { display: grid; gap: 4px; min-width: 0; }
+.sb-field > span:first-child { font: 0.85rem/1.2 var(--font-button); }
+.sb-field__error { color: var(--ink-red); font-size: var(--step--1); }
+.sb-input { font: inherit; color: var(--text); background: var(--paper); border: var(--line-thin) solid var(--keyline); padding: 7px 10px; border-radius: 0; min-width: 0; width: 100%; }
+.sb-field[data-bad] .sb-input { border-color: var(--ink-red); }
+
+.sb-toggle { display: inline-flex; gap: 10px; align-items: center; cursor: pointer; }
+.sb-toggle input { appearance: none; margin: 0; width: 44px; height: 24px; border: var(--line-thin) solid var(--keyline); background: var(--paper); position: relative; cursor: pointer; flex: none; }
+.sb-toggle input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; background: var(--text); transition: left 120ms var(--ease-out); }
+.sb-toggle input:checked { background: var(--ink-yellow); }
+.sb-toggle input:checked::after { left: 22px; background: var(--ink-black); }
+
+.sb-seg { display: inline-flex; border: var(--line-thin) solid var(--keyline); }
+.sb-seg button { font: 0.85rem/1.2 var(--font-button); border: 0; border-right: var(--line-thin) solid var(--keyline); background: var(--paper); color: var(--text); padding: 7px 12px; cursor: pointer; }
+.sb-seg button:last-child { border-right: 0; }
+.sb-seg button[aria-pressed="true"] { background: var(--solid); color: var(--on-solid); }
+
+.sb-list { list-style: none; margin: 0; padding: 0; border-top: var(--line-thin) solid var(--keyline); }
+.sb-list > li { display: flex; gap: var(--s0); align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--muted); min-width: 0; }
+.sb-list > li > :first-child { min-width: 0; overflow-wrap: anywhere; }
+
+.sb-key { width: 40px; height: 28px; flex: none; display: inline-grid; place-items: center; border: var(--line-thin) solid var(--keyline); border-radius: 4px; font: 0.8rem/1 var(--font-display); }
+.sb-key[data-ink="red"] { background: var(--ink-red); color: var(--ink-white); }
+.sb-key[data-ink="yellow"] { background: var(--ink-yellow); color: var(--ink-black); }
+.sb-key[data-ink="black"] { background: var(--ink-black); color: var(--ink-white); }
+.sb-key[data-ink="white"] { background: var(--ink-white); color: var(--ink-black); }
+
+.sb-num { font-family: var(--font-code); font-size: 1.35rem; line-height: 1; }
+.sb-notice { border: var(--line-thin) solid var(--keyline); padding: 10px 14px; background: var(--wash); }
+.sb-notice[data-tone="bad"] { border-color: var(--ink-red); }

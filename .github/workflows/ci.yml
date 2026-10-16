@@ -28,6 +28,17 @@ jobs:
 
       - run: pip install pillow jsonschema
 
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: JS packages (@slowboard/*) and the example's UI
+        run: |
+          npm ci
+          npm test
+          npm run build:example
+
       - name: Unit tests (runner)
         env:
           PYTHONPATH: kit:sdk:example
@@ -56,6 +67,14 @@ jobs:
           for v in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS"):
               assert os.environ.get(v) == "1", f"{v}={os.environ.get(v)!r}"
           print("sci ok, numpy", numpy.__version__)'
+
+      - name: Example UI bundle in the image
+        run: |
+          id=$(docker create slowapp-example:dev)
+          docker cp "$id:/ui/index.html" /tmp/ui.html
+          docker rm "$id" >/dev/null
+          cmp /tmp/ui.html example/ui/dist/index.html
+          node js/dev/bin/slowapp.js check /tmp/ui.html
 
       - name: Example app in fixture mode (twice)
         env:

@@ -138,7 +138,7 @@ class Rules(unittest.TestCase):
 
     def test_structure(self):
         self.bad(CALENDAR.replace('network = "egress"', 'network = "lan"'), "not one of")
-        self.bad(CALENDAR.replace('contract = 3', 'contract = 2'), "must be 3")
+        self.bad(CALENDAR.replace('contract = 3', 'contract = 2'), "not one of [3, 4]")
         self.bad(CALENDAR.replace('memory = "96m"', 'memory = "96MB"'), "doesn't match")
         self.bad(CALENDAR.replace('title = "Calendar"\n', ''), "missing 'title'")
         self.bad(CALENDAR + "\n[extra]\nx = 1\n", "unknown key 'extra'")
@@ -157,6 +157,40 @@ class Rules(unittest.TestCase):
         self.bad(CALENDAR.replace("agenda = \"452x444.k4\"", "nope = \"452x444.k4\""), "isn't declared")
         with tempfile.TemporaryDirectory() as d:
             self.bad(CALENDAR, "no directory fixtures/busy-week", Path(d) / "calendar")
+
+
+# Contract 4: the calendar with a UI bundle, docs and a job taking args.
+CALENDAR4 = (CALENDAR.replace("contract = 3", "contract = 4")
+             .replace("[ui]\nidle_s = 120\nstart_timeout_s = 15", '[ui]\nentry = "/ui/index.html"')
+             + '\n[docs.tags]\nmax_kb = 64\non_change = ["render"]\n[docs.events]\nwriter = "job"\n'
+             + '\n[[job]]\nname = "google_finish"\nargs = { url = "string" }\n')
+
+
+class Contract4(unittest.TestCase):
+    bad = Rules.bad
+
+    def test_ui_docs_and_args_validate(self):
+        with tempfile.TemporaryDirectory() as d:
+            app = Path(d) / "calendar"
+            (app / "fixtures" / "busy-week").mkdir(parents=True)
+            errs, warns = check(CALENDAR4, app)
+        self.assertEqual(errs, [])
+        self.assertEqual([w for w in warns if "docs" in w or "[ui]" in w], [])
+
+    def test_rules(self):
+        self.bad(CALENDAR4.replace("contract = 4", "contract = 3"), "need contract = 4")
+        self.bad(CALENDAR4.replace('entry = "/ui/index.html"', 'idle_s = 60'), "needs an entry")
+        self.bad(CALENDAR4.replace('entry = "/ui/index.html"', 'entry = "/ui/../x.html"'), "can't contain")
+        self.bad(CALENDAR4.replace('entry = "/ui/index.html"', 'entry = "ui/index.html"'), "doesn't match")
+        self.bad(CALENDAR4.replace('on_change = ["render"]', 'on_change = ["nope"]'), "isn't declared")
+        self.bad(CALENDAR4.replace('writer = "job"', 'writer = "app"'), "not one of")
+        self.bad(CALENDAR4.replace('url = "string"', 'url = "url"'), "not one of")
+        self.bad(CALENDAR4.replace("max_kb = 64", "max_kb = 4096"), "> 1024")
+        # A contract 4 backend alone is fine; a bundle with backend-only keys warns.
+        errs, _ = check(CALENDAR4.replace('entry = "/ui/index.html"', 'backend = true'))
+        self.assertFalse([e for e in errs if "ui" in e], errs)
+        _, warns = check(CALENDAR4.replace('entry = "/ui/index.html"', 'entry = "/ui/index.html"\nidle_s = 60'))
+        self.assertTrue(any("only apply to a backend" in w for w in warns), warns)
 
 
 if __name__ == "__main__":

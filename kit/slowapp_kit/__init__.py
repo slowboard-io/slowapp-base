@@ -1,4 +1,4 @@
-"""slowapp_kit: the app side of contract 3 (see MANIFEST.md and the hub's docs/SLOWBOARD.md §8).
+"""slowapp_kit: the app side of contracts 3 and 4 (see MANIFEST.md and the hub's docs/SLOWBOARD.md §8).
 
 An app is a container whose command is `job <name>` or `serve`. It reads its run from the
 environment (SLOWAPP_*), draws each requested feed at its surface size in the four inks, and
@@ -18,6 +18,10 @@ writes /out. The kit does the parts every app would otherwise get wrong:
 
     if __name__ == "__main__":
         main()
+
+Contract 4 (app UIs): ctx.args (/in/args.json from the UI's jobs.run), ctx.docs and
+ctx.doc(name) (the hub-stored docs, /in/docs), ctx.write_doc(name, value) (/out/docs, applied if
+the doc didn't change meanwhile) and ctx.result(value) (/out/result.json, back to the UI).
 
 What it covers: the ink check and exact-size check on every card; blob ids (for tests); secret()
 that honours fixture mode; fetch-then-draw snapshots that double as fixtures; an HTTP helper that
@@ -49,6 +53,8 @@ Context.write_prompts = output.write_prompts
 Context.write_summary = output.write_summary
 Context.write_cache_key = output.write_cache_key
 Context.write_timing = output.write_timing
+Context.write_doc = output.write_doc
+Context.result = output.write_result
 Context.secret = net.secret
 Context.http_get = net.http_get
 Context.http_json = net.http_json

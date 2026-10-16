@@ -1,0 +1,21 @@
+{
+  "name": "@slowboard/app",
+  "version": "0.1.0",
+  "description": "The bridge between a Slowboard app's UI and its hub: docs, settings, secrets, jobs and the hub's chrome, over a MessagePort (protocol 1).",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./protocol.json": "./protocol.json"
+  },
+  "files": [
+    "README.md",
+    "index.d.ts",
+    "index.js",
+    "protocol.json"
+  ],
+  "license": "UNLICENSED",
+  "sideEffects": false
+}

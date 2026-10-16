@@ -1,0 +1,30 @@
+{
+  "name": "@slowboard/ui",
+  "version": "0.1.0",
+  "description": "React components for a Slowboard app UI, in the hub's look: slowboard.io's tokens, its four fonts (inlined into the bundle), cards, buttons, fields, toggles, segmented controls, lists and key caps.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./ui.css": "./ui.css",
+    "./tokens.css": "./tokens.css"
+  },
+  "files": [
+    "README.md",
+    "fonts",
+    "index.d.ts",
+    "index.js",
+    "tokens.css",
+    "ui.css"
+  ],
+  "license": "UNLICENSED",
+  "sideEffects": [
+    "*.css",
+    "./index.js"
+  ],
+  "peerDependencies": {
+    "react": "^19.0.0"
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "name": "@slowboard/app-react",
+  "version": "0.1.0",
+  "description": "React hooks for a Slowboard app UI: useDoc, useSettings, useSecrets, useJob, useRuns and useTheme over @slowboard/app.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    }
+  },
+  "files": [
+    "README.md",
+    "index.d.ts",
+    "index.js"
+  ],
+  "license": "UNLICENSED",
+  "sideEffects": false,
+  "dependencies": {
+    "@slowboard/app": "0.1.0"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0"
+  }
+}

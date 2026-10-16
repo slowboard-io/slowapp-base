@@ -1,9 +1,15 @@
-# App manifest (`slowapp.toml`), contract 3
+# App manifest (`slowapp.toml`), contract 4
 
 A slowapp is an OCI image plus this manifest (the hub's design: epaper-dashboard
 `docs/SLOWBOARD.md` §8; section numbers below refer to it). The manifest says what the app may
 touch (its grants), which jobs it has, which feeds it draws and how CI renders it from a fixture.
 The hub derives trust from where an app was installed from, never from the manifest (E10).
+
+**Contract 4** adds app UIs: a single-file bundle the hub shows in a sandboxed frame (`[ui]
+entry`), hub-stored JSON docs the UI edits (`[docs.<name>]`), and jobs a UI calls with arguments
+(`[[job]] args`, `/in/args.json`, `/out/result.json`). A contract 3 manifest still validates and
+still loads on a contract 4 hub; contract 4 keys need `contract = 4`. The JavaScript side is in
+[`js/`](js/) (README: "App UIs").
 
 - Structure: [`sdk/slowapp_sdk/schema/slowapp.schema.json`](sdk/slowapp_sdk/schema/slowapp.schema.json) (JSON Schema 2020-12).
 - Rules a schema can't express: [`sdk/slowapp_sdk/validate.py`](sdk/slowapp_sdk/validate.py), listed below.
@@ -34,14 +40,14 @@ tests/             unit tests, run inside the base image
 |---|---|---|
 | `id` | string, `[a-z][a-z0-9-]{1,23}` | Names the container `sb-<id>`; the repo is `slowapp-<id>` by convention. |
 | `title` | string, ≤ 40 | Shown on the hub's app card. |
-| `contract` | `3` | This contract (2 was the same with `[pane]` and `EPAPER_*`). |
+| `contract` | `3` or `4` | The contract the app is written to (2 was 3 with `[pane]` and `EPAPER_*`). Its jobs get it as `SLOWAPP_CONTRACT`. |
 | `image` | string | Registry path without tag; the hub's config pins `image@sha256:…`. |
 | `memory` | size (`96m`, `1g`) | Hard limit: `--memory` = `--memory-swap`. Charged at admission (§7.4). |
 | `tmp` | size | `--tmpfs /tmp:size=`. Counts against `memory`. |
 | `timeout_s` | 1–3600 | The job is killed past this (exit 137, outcome `timeout`). |
 | `network` | `none` \| `egress` | `egress` is `pasta --no-map-gw`: internet **and the LAN** (M14), never host loopback. |
 | `secrets` | names | Required podman secrets at `/run/secrets/<name>`. Missing → exit 5. |
-| `optional_secrets` | names | Mounted if set. |
+| `optional_secrets` | names | Mounted once set (from the CLI, or the app's UI with `secrets.set`). |
 | `data` | `{ max_mb }` | `/data` bind mount. Over `max_mb` (checked with `du` after runs) pauses the app. |
 | `cache` | `{ tmpfs_mb }` | `--tmpfs /cache`. Counts against `memory`. |
 | `exports` | names | P4 transitional only (R3): files under `/export` other apps may import. |
@@ -56,8 +62,27 @@ Each key is a setting the hub renders as a form field and writes to `/in/setting
 
 ## `[ui]` (optional)
 
-Only apps with a page declare it. `idle_s` (stop after this long with no viewer and no job) and
-`start_timeout_s` (how long `serve` may take to answer `/_sb/health`).
+| Key | Meaning |
+|---|---|
+| `entry` | Contract 4. The app's UI: one self-contained HTML file in the image (`/ui/index.html`), at most 2 MB, with its JS, CSS, fonts and images inlined (the frame can't fetch anything). The hub copies it out once per image and serves it in a sandboxed frame at `/apps/<id>`; opening it starts no container. Build it with `@slowboard/dev`'s Vite plugin. |
+| `backend` | Contract 4. `true` also runs the image's `serve` for the UI's `backend.fetch` (the hub proxies it; slow on the board, so the exception). Contract 3's `[ui]` always means a backend. |
+| `idle_s` | Backend only: stop after this long with no viewer and no job. |
+| `start_timeout_s` | Backend only: how long `serve` may take to answer `/_sb/health`. |
+
+## `[docs.<name>]` (contract 4)
+
+The app's editable state as JSON documents the hub stores (in its database, so they're backed up
+and need no container). The UI reads and writes them (`docs.get`, `docs.put` with the revision it
+read; a stale one is refused with the current doc). Jobs get them at `/in/docs/<name>.json`
+(`ctx.doc(name)`) and may write `/out/docs/<name>.json` (`ctx.write_doc(name, value)`), applied
+only if the doc didn't change while the job ran (otherwise the job runs again). Big, binary or
+private state stays in `/data`.
+
+| Key | Meaning |
+|---|---|
+| `max_kb` | 1–1024, default 64: the largest the serialised doc may be. |
+| `on_change` | Jobs to run after the UI writes it, 2 s after the last write. A job's write doesn't trigger them. |
+| `writer` | `ui`, `job` or `both` (default): who may write it. |
 
 ## `[events]`
 
@@ -73,6 +98,7 @@ Only apps with a page declare it. `idle_s` (stop after this long with no viewer 
 | `jitter_s` | Random delay added to a schedule. |
 | `inputs` | `self:<export>` or `<app>:<export>`: the planner skips the job while their hash is unchanged. |
 | `expected_s` | Duration hint until the hub has measured p90 (§7.5). |
+| `args` | Contract 4: `{ name = "string" \| "number" \| "integer" \| "boolean" }`. What the UI may pass to `jobs.run`; the hub checks the types, refuses other names, and writes `/in/args.json` (`ctx.args`). All optional. The job's `/out/result.json` (`ctx.result(value)`, ≤ 256 KiB) goes back to the UI. |
 
 Triggers are implied (E13): `on_demand` is always true and boot or fallback rules are hub policy.
 
@@ -106,6 +132,10 @@ repo every push renders the examples.
 - `every` and `daily` are exclusive; `jitter_s` needs one of them; `every` ≥ 5 min.
 - `tmp` + `cache.tmpfs_mb` < `memory` (tmpfs is charged to the container).
 - Setting defaults have the right type and sit within `min`/`max` and `choices`.
+- Contract 4: `[ui]` has an `entry`, `backend = true` or both, and an `entry` has no `.` or `..`
+  part; a doc's `on_change` jobs are declared; `[ui] entry`/`backend`, `[docs]` and job `args`
+  need `contract = 4`. Warnings: backend-only `[ui]` keys next to a bundle-only UI, `[docs]`
+  without a UI.
 - Each example's fixture directory exists, its job and feeds are declared, and a fixed-size feed
   matches the example's surface. Warnings: a slot surface other than 452/456 × 444, a feed with no
   example, a required setting with no default.
@@ -118,10 +148,11 @@ The full tables are docs/SLOWBOARD.md §8.2–§8.4; `slowapp_kit` reads all of 
   UI gets jobs as `POST /_sb/jobs/<name>` with slowbhub's body `{"run_id", "out", "env"}`: the kit
   applies the per-run keys of `env` (`SLOWAPP_FEEDS`, `SLOWAPP_NOW`/`FOR`/`DEADLINE`, `SLOWAPP_REASON`,
   `SLOWAPP_MODE`, `SLOWAPP_RUN_ID`, `TZ`), ignores the rest, and writes to `out` (under `/out`).
-- **Environment:** `SLOWAPP_CONTRACT=3`, `SLOWAPP_APP`, `SLOWAPP_JOB`, `SLOWAPP_RUN_ID`, `SLOWAPP_REASON`,
+- **Environment:** `SLOWAPP_CONTRACT` (the app's: `3` or `4`), `SLOWAPP_APP`, `SLOWAPP_JOB`, `SLOWAPP_RUN_ID`, `SLOWAPP_REASON`,
   `SLOWAPP_NOW`, `SLOWAPP_FOR`, `SLOWAPP_DEADLINE`, `TZ`, `SLOWAPP_MODE` (`live` | `fixture`),
   `SLOWAPP_FEEDS`, `SLOWAPP_STATE=/data`; BLAS threads are 1.
-- **Mounts:** `/data` (rw; ro fixture copy), `/out`, `/in` (ro), `/tmp` and `/cache` (tmpfs),
+- **Mounts:** `/data` (rw; ro fixture copy), `/out`, `/in` (ro: `settings.json`, `layout.json`,
+  `events.jsonl`; contract 4 adds `args.json` and `docs/<name>.json`), `/tmp` and `/cache` (tmpfs),
   `/run/secrets/<name>` (ro, live only), `/run/sb` (`ui.sock`, and `ui.log`: the UI's stderr and
   its job children's, kept as a 256 KB ring by the kit). The root filesystem is read-only.
 - **Prompts** (the `prompts` grant): `/out/prompts.json`, each prompt's answers as
@@ -130,7 +161,8 @@ The full tables are docs/SLOWBOARD.md §8.2–§8.4; `slowapp_kit` reads all of 
   strip shows only the answers; without one the question goes in the strip.
 - **Output:** `/out/feeds/<feed>/deck.json` and `cards/<id>.png` (exact surface size, 2- or 8-bit
   indexed, PLTE within the inks, no tRNS, ≤ 256 KB, ≤ 32 cards), plus optional `prompts.json`,
-  `summary.json`, `cache_key`, `timing.json` and the kit's `.metrics.json`.
+  `summary.json`, `cache_key`, `timing.json` and the kit's `.metrics.json`. Contract 4:
+  `result.json` (back to the UI's `jobs.run`) and `docs/<name>.json`.
 - **Exit codes:** 0 ingest · 3 unchanged · 4 transient · 5 needs config · 64 contract error ·
   137 killed. Anything else is a failure with backoff.
 

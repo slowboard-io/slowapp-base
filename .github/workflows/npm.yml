@@ -1,0 +1,38 @@
+# Publish the @slowboard/* packages (js/*) to npm. By hand only: run it from the Actions tab once
+# the versions in js/*/package.json are bumped. Needs the NPM_TOKEN secret (an automation token
+# for the @slowboard scope). Each package publishes with provenance; a version already on npm is
+# skipped, so a re-run after a partial failure is safe.
+name: npm
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write      # npm provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - run: npm test
+      - run: npm run build:example
+      - name: Publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          for p in app app-react ui dev; do
+            name=$(node -p "require('./js/$p/package.json').name")
+            version=$(node -p "require('./js/$p/package.json').version")
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "$name@$version is already on npm"
+            else
+              npm publish -w "js/$p" --access public --provenance
+            fi
+          done
