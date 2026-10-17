@@ -37,7 +37,9 @@ class PhasesJob(unittest.TestCase):
             env = dict(os.environ, SLOWAPP_CONTRACT="4", SLOWAPP_JOB="phases", SLOWAPP_MODE="live",
                        SLOWAPP_NOW="2026-10-07T09:00:00-07:00", TZ="America/Vancouver", SLOWAPP_FEEDS="[]",
                        SLOWAPP_IN=str(d / "in"), SLOWAPP_OUT=str(d / "out"), SLOWAPP_STATE=str(d / "data"),
-                       SLOWAPP_MANIFEST=str(here / "slowapp.toml"))
+                       SLOWAPP_MANIFEST=str(here / "slowapp.toml"),
+                       # The child runs in example/: this process's (possibly relative) path, absolute.
+                       PYTHONPATH=os.pathsep.join(os.path.abspath(p) for p in sys.path if p))
             r = subprocess.run([sys.executable, "-m", "moon", "job", "phases"], env=env, cwd=here,
                                capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stderr)
