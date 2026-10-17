@@ -32,7 +32,6 @@ from slowapp_kit.inks import InkError, blob_id, check_png
 
 from . import validate
 
-CONTRACT = 3
 SLOTS = {"left": (0, "red"), "middle": (452, "yellow"), "right": (908, "black")}   # the default layout
 SLOT_W = {"left": 452, "middle": 456, "right": 452}
 PANEL_W, PANEL_H, STRIP_H = 1360, 480, 36
@@ -99,7 +98,7 @@ def run_args(m, example, image, data, out, inp, run_id, name, rundir):
         args += ["--tmpfs", f"/cache:rw,size={p['cache']['tmpfs_mb']}m"]
     if os.environ.get("SLOWAPP_PLATFORM"):
         args += ["--platform", os.environ["SLOWAPP_PLATFORM"]]
-    env = {"SLOWAPP_CONTRACT": str(CONTRACT), "SLOWAPP_APP": p["id"], "SLOWAPP_JOB": job, "SLOWAPP_RUN_ID": run_id,
+    env = {"SLOWAPP_CONTRACT": str(p.get("contract", 3)), "SLOWAPP_APP": p["id"], "SLOWAPP_JOB": job, "SLOWAPP_RUN_ID": run_id,
            "SLOWAPP_REASON": "fixture", "SLOWAPP_MODE": "fixture", "SLOWAPP_NOW": example["now"],
            "SLOWAPP_FOR": example["now"], "TZ": example.get("tz", "America/Vancouver"),
            "SLOWAPP_FEEDS": json.dumps(feeds_env(example)), "SLOWAPP_STATE": "/data"}
@@ -142,43 +141,45 @@ def run_example(app_dir, m, example, image):
 
 def check_out(out, example):
     """-> {feed: {"deck": deck, "cards": {id: (rgb image, blob id)}}}. Raises Fail on any contract break."""
-    res = {}
-    for feed, surface in example["feeds"].items():
-        size = tuple(int(v) for v in surface.split(".")[0].split("x"))
-        if feed == "prompts":
-            res[feed] = check_prompts(out, surface, size)
-            continue
-        root = out / "feeds" / feed
-        try:
-            deck = json.loads((root / "deck.json").read_text())
-        except (OSError, ValueError) as e:
-            raise Fail(f"{feed}: deck.json: {e}")
-        cards = deck.get("cards")
-        if not isinstance(cards, list) or not 1 <= len(cards) <= 32:
-            raise Fail(f"{feed}: deck.json needs 1-32 cards")
-        try:
-            vf, vu = (datetime.fromisoformat(deck[k]) for k in ("valid_from", "valid_until"))
-        except (KeyError, TypeError, ValueError) as e:
-            raise Fail(f"{feed}: valid_from / valid_until: {e}")
-        if vf.tzinfo is None or vu.tzinfo is None or vu <= vf:
-            raise Fail(f"{feed}: valid_from / valid_until need offsets and valid_until > valid_from")
-        got = {}
-        for i, c in enumerate(cards):
-            if c.get("kind") != ("home" if i == 0 else "detail"):
-                raise Fail(f"{feed}/{c.get('id')}: kind {c.get('kind')!r}; the first card is home, the rest detail")
-            if not c.get("title"):
-                raise Fail(f"{feed}/{c.get('id')}: no title")
-            try:
-                data = (root / "cards" / f"{c['id']}.png").read_bytes()
-                rgb = check_png(data, size)
-            except (OSError, InkError, KeyError) as e:
-                raise Fail(f"{feed}/{c.get('id')}: {e}")
-            got[c["id"]] = (rgb, blob_id(rgb))
-        res[feed] = {"deck": deck, "cards": got}
+    res = {feed: check_feed(out, feed, surface) for feed, surface in example["feeds"].items()}
     for extra in ("summary.json", ".metrics.json"):
         if (out / extra).exists():
             json.loads((out / extra).read_text())
     return res
+
+
+def check_feed(out, feed, surface):
+    """One feed's output at `surface`: {"deck": deck, "cards": {id: (rgb image, blob id)}}, or Fail."""
+    size = tuple(int(v) for v in surface.split(".")[0].split("x"))
+    if feed == "prompts":
+        return check_prompts(out, surface, size)
+    root = out / "feeds" / feed
+    try:
+        deck = json.loads((root / "deck.json").read_text())
+    except (OSError, ValueError) as e:
+        raise Fail(f"{feed}: deck.json: {e}")
+    cards = deck.get("cards")
+    if not isinstance(cards, list) or not 1 <= len(cards) <= 32:
+        raise Fail(f"{feed}: deck.json needs 1-32 cards")
+    try:
+        vf, vu = (datetime.fromisoformat(deck[k]) for k in ("valid_from", "valid_until"))
+    except (KeyError, TypeError, ValueError) as e:
+        raise Fail(f"{feed}: valid_from / valid_until: {e}")
+    if vf.tzinfo is None or vu.tzinfo is None or vu <= vf:
+        raise Fail(f"{feed}: valid_from / valid_until need offsets and valid_until > valid_from")
+    got = {}
+    for i, c in enumerate(cards):
+        if c.get("kind") != ("home" if i == 0 else "detail"):
+            raise Fail(f"{feed}/{c.get('id')}: kind {c.get('kind')!r}; the first card is home, the rest detail")
+        if not c.get("title"):
+            raise Fail(f"{feed}/{c.get('id')}: no title")
+        try:
+            data = (root / "cards" / f"{c['id']}.png").read_bytes()
+            rgb = check_png(data, size)
+        except (OSError, InkError, KeyError) as e:
+            raise Fail(f"{feed}/{c.get('id')}: {e}")
+        got[c["id"]] = (rgb, blob_id(rgb))
+    return {"deck": deck, "cards": got}
 
 
 BINDINGS = ("own.tap", "spare.tap", "own.hold", "spare.hold")

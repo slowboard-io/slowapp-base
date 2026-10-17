@@ -35,7 +35,12 @@
           "type": "array", "uniqueItems": true,
           "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,23}:[a-z][a-z0-9_-]{0,31}$"}
         },
-        "prompts": {"type": "boolean"}
+        "prompts": {"type": "boolean"},
+        "blurb": {"type": "string", "minLength": 1, "maxLength": 100},
+        "about": {"type": "string", "minLength": 1, "maxLength": 800},
+        "ink": {"enum": ["black", "white", "yellow", "red"]},
+        "license": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9.+() -]{0,63}$"},
+        "repo": {"type": "string", "maxLength": 200, "pattern": "^https://[^/\\s][^\\s]*$"}
       }
     },
     "settings": {

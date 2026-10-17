@@ -184,6 +184,9 @@ def rule_errors(m, app_dir=None):
                 warns.append(f"{where}: {surface} is not a default slot surface ({', '.join(sorted(SLOT_SURFACES))})")
     if feeds and not m.get("example"):
         warns.append("no [[example]]: CI can't render this app in fixture mode")
+    missing = [k for k in ("blurb", "about", "ink", "license", "repo") if k not in p]
+    if missing:
+        warns.append(f"[app] has no {', '.join(missing)}: the catalog page shows blanks for them")
     return errs, warns
 
 

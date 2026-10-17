@@ -86,6 +86,27 @@ jobs:
         if: always()
         run: '[ -f out/previews/report.md ] && cat out/previews/report.md >> "$GITHUB_STEP_SUMMARY" || true'
 
+      - name: Example catalog bundle (every size, slowd's strips)
+        env:
+          PYTHONPATH: kit:sdk
+          SLOWAPP_ENGINE: docker
+          SLOWD: ghcr.io/mike-anderson/slowd-sim:0.1.0
+        run: |
+          args=()
+          if docker pull -q "$SLOWD"; then args=(--slowd-image "$SLOWD")
+          else echo "::warning::couldn't pull $SLOWD: full-panel pictures get blank strips"; fi
+          python -m slowapp_sdk catalog build example --image slowapp-example:dev --out out/catalog "${args[@]}"
+          python -m slowapp_sdk catalog check out/catalog
+          cat out/catalog/report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: catalog
+          path: out/catalog/
+          if-no-files-found: warn
+          retention-days: 14
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:

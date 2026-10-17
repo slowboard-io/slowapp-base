@@ -11,6 +11,10 @@ memory = "48m"
 tmp = "8m"
 timeout_s = 30
 network = "none"
+blurb = "The moon's phase, and when the next full and new moons are."
+about = "Today's moon as it looks from your hemisphere, how much of it is lit, and the dates of the next full and new moons, with the week ahead on a second card. A line of your own, typed in its page, goes under the moon."
+ink = "yellow"
+repo = "https://github.com/mike-anderson/slowapp-base"
 
 [settings]
 south = { type = "boolean", default = false, label = "Southern hemisphere (the lit side flips)" }
