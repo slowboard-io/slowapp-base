@@ -18,6 +18,8 @@ from PIL import Image
 from .errors import ContractError
 from .inks import INK_SETS, WHITE
 
+CONTRACTS = ("3", "4")
+DOC_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 SURFACE_RE = re.compile(r"^(\d{1,4})x(\d{1,4})\.([a-z0-9]+)$")
 
 
@@ -96,8 +98,8 @@ class Context:
     @classmethod
     def from_env(cls, job=None, env=None, out=None):
         env = os.environ if env is None else env
-        if env.get("SLOWAPP_CONTRACT", "3") != "3":
-            raise ContractError(f"SLOWAPP_CONTRACT={env['SLOWAPP_CONTRACT']}: this kit speaks contract 3")
+        if env.get("SLOWAPP_CONTRACT", "4") not in CONTRACTS:
+            raise ContractError(f"SLOWAPP_CONTRACT={env['SLOWAPP_CONTRACT']}: this kit speaks contracts 3 and 4")
         tz = ZoneInfo(env.get("TZ") or "America/Vancouver")
         mode = env.get("SLOWAPP_MODE", "live")
         if mode not in ("live", "fixture"):
@@ -153,6 +155,33 @@ class Context:
     @property
     def layout(self):
         return self._in_json("layout.json", {})
+
+    # ------------------------------------------------------------ contract 4: docs and args
+
+    @property
+    def args(self):
+        """/in/args.json: what an app UI passed to jobs.run (checked by the hub against the job's
+        `args`). {} for any other run."""
+        return self._in_json("args.json", {})
+
+    @property
+    def docs(self):
+        """Every doc the hub holds for the app (/in/docs/<name>.json), by name. A doc never written
+        is absent."""
+        d = self.inp / "docs"
+        out = {}
+        for f in sorted(d.glob("*.json")) if d.is_dir() else []:
+            with open(f) as fh:
+                out[f.stem] = json.load(fh)
+        return out
+
+    def doc(self, name, default=None):
+        """One doc's value, or `default` if it was never written."""
+        try:
+            with open(self.inp / "docs" / f"{name}.json") as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return default
 
     def events(self):
         """Events for an `event` job: /in/events.jsonl, or (warm UI) the /_sb/events body, which the

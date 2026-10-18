@@ -1,9 +1,11 @@
 # The example slowapp: the moon's phase for the middle third. No network, no secrets, no data:
-# everything is computed from the time, so fixture mode needs nothing but `now`.
+# everything is computed from the time, so fixture mode needs nothing but `now`. Contract 4: a UI
+# (ui/, a Vite single-file build at /ui/index.html) edits a note the home card shows, and calls
+# the `phases` job with an argument.
 [app]
 id = "moon"
 title = "Moon"
-contract = 3
+contract = 4
 image = "ghcr.io/mike-anderson/slowapp-example"
 memory = "48m"
 tmp = "8m"
@@ -13,9 +15,22 @@ network = "none"
 [settings]
 south = { type = "boolean", default = false, label = "Southern hemisphere (the lit side flips)" }
 
+[ui]
+entry = "/ui/index.html"
+
+[docs.note]                      # a line for the home card; the UI writes it, render draws it
+max_kb = 1
+writer = "ui"
+on_change = ["render"]
+
 [[job]]
 name = "render"
 expected_s = 3
+
+[[job]]
+name = "phases"                  # called from the UI: jobs.run("phases", {count: 8})
+args = { count = "integer" }
+expected_s = 2
 
 [[feed]]
 name = "phase"

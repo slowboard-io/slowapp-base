@@ -1,0 +1,22 @@
+{
+  "name": "moon-ui",
+  "private": true,
+  "description": "The moon app's UI: a template for a Slowboard app UI (React, @slowboard/ui, one self-contained file at /ui/index.html).",
+  "type": "module",
+  "scripts": {
+    "dev": "slowapp dev",
+    "build": "slowapp build && slowapp check dist/index.html"
+  },
+  "dependencies": {
+    "@slowboard/app": "0.1.0",
+    "@slowboard/app-react": "0.1.0",
+    "@slowboard/ui": "0.1.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@slowboard/dev": "0.1.0",
+    "@vitejs/plugin-react": "6.1.1",
+    "vite": "8.3.1"
+  }
+}

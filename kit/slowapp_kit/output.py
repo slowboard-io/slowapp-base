@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 
 from PIL import Image
 
+from .context import DOC_NAME_RE
 from .errors import ContractError
 from .inks import InkError, encode_png
 
@@ -167,6 +168,29 @@ def write_summary(ctx, status="ok", lines=(), actions=()):
         if set(a) != {"label", "job"}:
             raise ContractError(f"summary action {a} needs exactly label and job")
     atomic_write(ctx.out / "summary.json", _json({"status": status, "lines": list(lines), "actions": acts}))
+
+
+def write_doc(ctx, name, value):
+    """Contract 4: a doc's new value, /out/docs/<name>.json. The hub applies it after the run
+    only if no one changed the doc while the job ran (then it runs the job again), and only for
+    docs the manifest lets jobs write (writer = "job" or "both")."""
+    if not DOC_NAME_RE.match(name):
+        raise ContractError(f"doc name {name!r}")
+    declared = ctx.manifest.get("docs")
+    if declared is not None and name not in declared:
+        raise ContractError(f"doc {name!r} isn't declared in [docs]")
+    if (declared or {}).get(name, {}).get("writer") == "ui":
+        raise ContractError(f"doc {name!r} is writer = \"ui\": jobs can't write it")
+    atomic_write(ctx.out / "docs" / f"{name}.json", _json(value))
+
+
+def write_result(ctx, value):
+    """Contract 4: what jobs.run hands back to the app's UI, /out/result.json (JSON, at most
+    256 KiB)."""
+    data = _json(value)
+    if len(data.encode()) > 256 * 1024:
+        raise ContractError(f"result.json is {len(data.encode())} bytes, over 256 KiB")
+    atomic_write(ctx.out / "result.json", data)
 
 
 def write_cache_key(ctx, key):

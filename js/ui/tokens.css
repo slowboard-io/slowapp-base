@@ -1,0 +1,50 @@
+/*
+ * Slowboard design tokens: shared by slowboard.io and the slowhub web UI (hub.slowboard.io).
+ * The palette is the 1085 panel's four inks and nothing else. Copy or import this file as-is;
+ * don't fork values in the hub.
+ */
+:root {
+  /* The four inks */
+  --ink-black: #111111;
+  --ink-white: #ffffff;
+  --ink-yellow: #ffde00;
+  --ink-red: #e10600;
+
+  /* Roles */
+  --paper: var(--ink-white);
+  --text: var(--ink-black);
+  --keyline: var(--ink-black);
+  --accent: var(--ink-red);
+  --mark: var(--ink-yellow);          /* highlighter / selection / focus */
+  --on-red: var(--ink-white);
+  --on-yellow: var(--ink-black);
+  --on-black: var(--ink-white);
+
+  /* Type: Press Start 2P is the display and label voice (one weight; never synthesize bold),
+     Silkscreen is only the SLOWBOARD wordmark, VT323 is numbers, codes and listings,
+     Chivo is reading text. */
+  --font-display: "Press Start 2P", "Courier New", monospace;
+  --font-wordmark: "Silkscreen", "Courier New", monospace;
+  --font-button: "Silkscreen", "Courier New", monospace;   /* regular weight, on buttons */
+  --font-code: "VT323", ui-monospace, "SF Mono", Menlo, monospace;
+  --font-body: "Chivo Variable", "Chivo", "Helvetica Neue", sans-serif;
+
+  --step--1: clamp(0.84rem, 0.8rem + 0.15vw, 0.92rem);
+  --step-0: clamp(1rem, 0.96rem + 0.2vw, 1.12rem);
+  --step-1: clamp(1.25rem, 1.15rem + 0.45vw, 1.5rem);
+  --step-2: clamp(1.6rem, 1.4rem + 0.9vw, 2.1rem);
+  --step-3: clamp(2rem, 1.6rem + 1.9vw, 3.2rem);
+  --step-4: clamp(2.6rem, 1.8rem + 3.6vw, 5.2rem);
+
+  /* Space: one 8 px rhythm */
+  --s-1: 4px; --s0: 8px; --s1: 16px; --s2: 24px; --s3: 32px; --s4: 48px; --s5: 72px; --s6: 112px;
+
+  /* Lines: chunky keylines are the system's structure */
+  --line: 3px;
+  --line-thin: 2px;
+  --radius: 0;                        /* nothing is rounded except the drop and the keys */
+
+  /* Motion: e-paper refresh timing, used literally by the demos */
+  --refresh-flash: 160ms;           /* each of the black and white flash phases */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}

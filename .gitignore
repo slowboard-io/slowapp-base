@@ -1,3 +1,6 @@
 __pycache__/
 *.pyc
 out/
+node_modules/
+dist/
+.slowapp/

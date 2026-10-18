@@ -15,7 +15,7 @@ RUN apt-get update \
 ENV PYTHONPATH=/opt/slowapp \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    SLOWAPP_CONTRACT=3 \
+    SLOWAPP_CONTRACT=4 \
     SLOWAPP_FONTS=/opt/slowapp/fonts \
     SLOWAPP_MANIFEST=/app/slowapp.toml \
     TZ=America/Vancouver
@@ -30,9 +30,9 @@ RUN python3 -m compileall -q /opt/slowapp \
 
 ARG VERSION=dev
 LABEL org.opencontainers.image.title="slowapp-python" \
-      org.opencontainers.image.description="Slowapp base: Debian trixie, Python 3, Pillow, slowapp_kit (contract 3)" \
+      org.opencontainers.image.description="Slowapp base: Debian trixie, Python 3, Pillow, slowapp_kit (contracts 3 and 4)" \
       org.opencontainers.image.source="https://github.com/mike-anderson/slowapp-base" \
       org.opencontainers.image.version="${VERSION}" \
-      org.slowboard.contract="3"
+      org.slowboard.contract="4"
 
 WORKDIR /tmp

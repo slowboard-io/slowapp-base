@@ -16,7 +16,8 @@ contract's design live in [epaper-dashboard](https://github.com/mike-anderson/ep
   runs both kinds of app stores the slim layers once.
 - **Platforms:** `linux/arm/v7` (the Lyra), `linux/arm64`, `linux/amd64`. The libraries come from
   Debian's packages, because PyPI has few 32-bit ARM wheels.
-- **Contract:** label `org.slowboard.contract=3`, and `SLOWAPP_CONTRACT=3` in the environment.
+- **Contract:** label `org.slowboard.contract=4`, and `SLOWAPP_CONTRACT=4` in the environment
+  (the hub sets each job's to its own app's). The kit runs contract 3 and 4 apps.
 
 ### Versions
 
@@ -72,6 +73,41 @@ PYTHONPATH=/tmp/slowapp python3 -m slowapp_sdk fixture --image slowapp-moon:dev 
 
 Set `SLOWAPP_PLATFORM=linux/arm/v7` to run the board's image under QEMU.
 
+## App UIs (contract 4)
+
+An app can ship a UI: one HTML file the hub shows at `/apps/<id>` in a sandboxed frame, with no
+network of its own. It reaches the hub over a MessagePort through `@slowboard/app` (the bridge,
+protocol 1: [`js/app/protocol.json`](js/app/protocol.json)). Editing docs and settings, storing a
+secret and reading the panel's picture start no container; `jobs.run` runs one of the app's jobs.
+
+| Package | What |
+|---|---|
+| [`@slowboard/app`](js/app) | The bridge client: `connect()`, then `app.docs`, `app.settings`, `app.secrets`, `app.jobs.run`, `app.events`, `app.ui` (title, toast, confirm, autoResize), `app.device.preview`, the hub's theme. No dependencies. |
+| [`@slowboard/app-react`](js/app-react) | `<AppProvider>` and hooks: `useDoc`, `useSettings`, `useSecrets`, `useJob`, `useRuns`, `useTheme`. |
+| [`@slowboard/ui`](js/ui) | React components in the hub's look (slowboard.io's tokens and fonts): `Card`, `Button`, `Field`, `TextInput`, `Toggle`, `Segmented`, `List`, `KeyCap`, `Notice`… |
+| [`@slowboard/dev`](js/dev) | The Vite plugin (one self-contained `index.html`, refused over 2 MB) and `slowapp dev`. |
+
+[`example/ui`](example/ui) is the template (the moon app's UI: a setting, a doc the card draws,
+and a job called with an argument):
+
+```sh
+npm install                        # at the repo root: the workspaces link js/* into example/ui
+cd example/ui
+npm run dev                        # the app in the hub's sandbox at http://localhost:5173/__slowboard/
+SLOWAPP_IMAGE=slowapp-example:dev npm run dev    # jobs run in the app's image, as on the hub
+npm run build                      # dist/index.html; the Dockerfile copies it to /ui/index.html
+```
+
+`slowapp dev` serves a stand-in for the hub's app page: the same sandbox and bridge, a mock hub
+with the hub's rules (revisions, writers, sizes, settings and argument checks, `on_change`), its
+state in `.slowapp/dev.json`, theme and phone-width switches, and a log of every bridge message.
+Jobs run with the app's command (`slowboard({job: [...]})`), its image (`{image}`), or
+`slowapp.dev.js` handlers. In Python, a job reads `ctx.args` and `ctx.doc(name)`, and writes
+`ctx.result(value)` and `ctx.write_doc(name, value)`.
+
+The packages publish to npm with the `npm` workflow (by hand). Until they're published, an app
+outside this repo can't install them.
+
 ## This repo
 
 ```
@@ -79,9 +115,10 @@ images/python/Dockerfile       slowapp-python
 images/python-sci/Dockerfile   slowapp-python-sci (ARG BASE)
 kit/slowapp_kit/               the app side of the contract: context, output checks, jobs, UI server
 sdk/slowapp_sdk/               `python3 -m slowapp_sdk validate|fixture`, and the manifest schema
-example/                       the moon app, the images' smoke test (the template repo's twin)
+example/                       the moon app, the images' smoke test (the template repo's twin); example/ui its UI
+js/                            @slowboard/app, app-react, ui and dev (npm workspaces; package.json at the root)
 fonts/                         baked into the images at /opt/slowapp/fonts (licences alongside)
 ```
 
 Tests: `PYTHONPATH=kit:sdk:example python3 -m unittest discover -s kit/tests` (likewise
-`sdk/tests` and `example/tests`). CI also runs them inside the images and on armv7.
+`sdk/tests` and `example/tests`). CI also runs them inside the images and on armv7. JS: `npm test`.

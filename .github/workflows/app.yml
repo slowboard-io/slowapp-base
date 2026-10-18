@@ -80,6 +80,24 @@ jobs:
       - name: Build (amd64)
         run: docker buildx build --load -t app:ci .
 
+      - name: UI bundle (contract 4 [ui] entry)
+        run: |
+          entry=$(python3 -c 'import tomllib; print((tomllib.load(open("slowapp.toml", "rb")).get("ui") or {}).get("entry", ""))')
+          if [ -z "$entry" ]; then echo "no [ui] entry"; exit 0; fi
+          id=$(docker create app:ci)
+          docker cp "$id:$entry" /tmp/ui.html || { echo "::error::[ui] entry $entry isn't in the image"; exit 1; }
+          docker rm "$id" >/dev/null
+          size=$(stat -c %s /tmp/ui.html)
+          echo "$entry: $size bytes (the hub serves at most 2097152)"
+          [ "$size" -le 2097152 ] || { echo "::error::$entry is over 2 MB"; exit 1; }
+          python3 - <<'PY'
+          import re, sys
+          html = open("/tmp/ui.html", encoding="utf-8").read()
+          ext = re.findall(r'<(?:script|link|img)\b[^>]*\b(?:src|href)="(?!data:|#)([^"]+)"', html)
+          if ext:
+              sys.exit(f"::error::the UI loads {ext}: the sandboxed frame can't fetch files (build it as one file)")
+          PY
+
       - name: Examples in fixture mode (twice)
         env:
           SLOWAPP_ENGINE: docker

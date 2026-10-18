@@ -1,4 +1,4 @@
-"""Validate an app manifest (slowapp.toml) against contract 3.
+"""Validate an app manifest (slowapp.toml) against contracts 3 and 4.
 
   slowapp validate            ./slowapp.toml
   slowapp validate DIR ...    each DIR/slowapp.toml (or a path to the file)
@@ -109,6 +109,29 @@ def rule_errors(m, app_dir=None):
         errs.append("a feed named 'prompts' needs prompts = true (the prompts grant)")
     if m.get("events", {}).get("accept") and "event" not in jobs:
         errs.append("[events] accept needs a job named 'event'")
+    # Contract 4: app UIs (a bundle and/or a backend), docs and job args.
+    ui = m.get("ui")
+    c4 = p.get("contract", 3) >= 4
+    if not c4:
+        if ui and ("entry" in ui or "backend" in ui):
+            errs.append("[ui] entry and backend need contract = 4")
+        if m.get("docs"):
+            errs.append("[docs] needs contract = 4")
+        if any(j.get("args") for j in m.get("job", [])):
+            errs.append("job args need contract = 4")
+    elif ui is not None:
+        if "entry" not in ui and not ui.get("backend"):
+            errs.append("[ui] needs an entry (the UI bundle), backend = true, or both")
+        if any(c in (".", "..") for c in ui.get("entry", "").split("/")):
+            errs.append(f"[ui] entry {ui['entry']!r} can't contain . or ..")
+        if ui.get("entry") and not ui.get("backend") and ("idle_s" in ui or "start_timeout_s" in ui):
+            warns.append("[ui] idle_s and start_timeout_s only apply to a backend")
+    for name, d in m.get("docs", {}).items():
+        for j in d.get("on_change", []):
+            if j not in jobs:
+                errs.append(f"doc {name}: on_change job {j!r} isn't declared")
+    if m.get("docs") and not (ui or {}).get("entry"):
+        warns.append("[docs] without a [ui] entry: only jobs can change them")
     for j in m.get("job", []):
         if "every" in j and "daily" in j:
             errs.append(f"job {j['name']}: every and daily are exclusive")

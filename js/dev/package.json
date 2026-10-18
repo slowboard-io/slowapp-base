@@ -1,0 +1,29 @@
+{
+  "name": "@slowboard/dev",
+  "version": "0.1.0",
+  "description": "Build and develop a Slowboard app UI: the Vite plugin (single-file bundle under the hub's cap) and `slowapp dev` (the app in the hub's sandbox, against a mock hub).",
+  "type": "module",
+  "exports": {
+    ".": "./vite.js",
+    "./vite": "./vite.js",
+    "./hub": "./hub.js"
+  },
+  "bin": {
+    "slowapp": "./bin/slowapp.js"
+  },
+  "files": [
+    "vite.js",
+    "hub.js",
+    "chrome.js",
+    "bin",
+    "README.md"
+  ],
+  "license": "UNLICENSED",
+  "dependencies": {
+    "smol-toml": "1.9.0",
+    "vite-plugin-singlefile": "2.3.3"
+  },
+  "peerDependencies": {
+    "vite": "^8.0.0"
+  }
+}

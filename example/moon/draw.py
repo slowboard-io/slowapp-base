@@ -33,7 +33,8 @@ def disc(d, cx, cy, r, t, south=False):
     d.ellipse((cx - r, cy - r, cx + r, cy + r), outline=BLACK, width=2)
 
 
-def home(ctx, surface, south):
+def home(ctx, surface, south, note=None):
+    """`note` (the UI's note doc, contract 4) takes the new-moon line when set."""
     t = ctx.for_
     img = ctx.canvas(surface)
     d = ImageDraw.Draw(img)
@@ -46,7 +47,8 @@ def home(ctx, surface, south):
            font=small, fill=BLACK, anchor="mt")
     full, new = phase.next_phase(t, 0.5), phase.next_phase(t, 0.0)
     d.text((w // 2, 374), f"Full {full:%a %d %b}", font=small, fill=RED, anchor="mt")
-    d.text((w // 2, 404), f"New {new:%a %d %b}", font=small, fill=BLACK, anchor="mt")
+    bottom = note.strip()[:30] if isinstance(note, str) and note.strip() else f"New {new:%a %d %b}"
+    d.text((w // 2, 404), bottom, font=small, fill=BLACK, anchor="mt")
     return img
 
 

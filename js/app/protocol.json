@@ -1,0 +1,18 @@
+{
+  "comment": "The app UI bridge, protocol 1 (epaper-dashboard docs/SLOWBOARD.md §7.7 App UIs). The hub's chrome (crates/slowhub/web/app.js) and the dev chrome (@slowboard/dev) implement every call; @slowboard/app wraps them. A copy lives in epaper-dashboard at crates/slowhub/web/protocol.json; keep the two identical.",
+  "protocol": 1,
+  "handshake": { "message": { "slowboard": "connect", "protocol": 1 }, "transfer": "MessagePort" },
+  "calls": [
+    "connect",
+    "docs.get", "docs.put", "docs.watch",
+    "settings.get", "settings.set",
+    "secrets.status", "secrets.set", "secrets.clear",
+    "jobs.run",
+    "events.watch",
+    "ui.title", "ui.toast", "ui.confirm", "ui.resize",
+    "device.preview",
+    "backend.fetch"
+  ],
+  "events": ["doc", "run", "theme"],
+  "errors": ["conflict", "invalid", "forbidden", "not_found", "too_big", "no_backend", "unknown_call", "failed"]
+}
