@@ -7,7 +7,8 @@
         ...
 
     if __name__ == "__main__":
-        main()          # argv: `job <name>` (attached CLI run) or `serve` (lazy UI on /run/sb/ui.sock)
+        main()          # argv: `job <name>` (attached CLI run), `serve` (lazy UI on /run/sb/ui.sock)
+                    # or `slowapp-remote job <name>` (a cloud hub run, remote.py)
 
 CLI: the handler runs in-process and its outcome becomes the exit code. HTTP (warm UI): the same
 handler runs in a child process (the app's own entrypoint, `job <name>`), so the UI doesn't keep
@@ -135,6 +136,12 @@ def run_in_child(name, env=None, out=None, events_body=None, timeout=None):
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["slowapp-remote"]:
+        # The cloud hub's command: this image's own entrypoint, `slowapp-remote job <name>`. The
+        # wrapper fetches /in and /data, runs `job <name>` as a child of the same entrypoint and
+        # uploads what it made (remote.py).
+        from . import remote
+        sys.exit(remote.run(argv[1:], entry=entrypoint()))
     if argv[:1] == ["job"] and len(argv) == 2:
         try:
             ctx = Context.from_env(job=argv[1])
@@ -148,5 +155,5 @@ def main(argv=None):
         from .serve import serve
         serve()
         return
-    log("usage: job <name> | serve")
+    log("usage: job <name> | serve | slowapp-remote job <name>")
     sys.exit(EXIT_CONTRACT)

@@ -116,7 +116,9 @@ outside this repo can't install them.
 ```
 images/python/Dockerfile       slowapp-python
 images/python-sci/Dockerfile   slowapp-python-sci (ARG BASE)
-kit/slowapp_kit/               the app side of the contract: context, output checks, jobs, UI server
+kit/slowapp_kit/               the app side of the contract: context, output checks, jobs, UI server,
+                               remote.py (slowapp-remote: a cloud hub run from presigned links)
+kit/bin/slowapp-remote         the wrapper's command, /usr/local/bin in the images
 sdk/slowapp_sdk/               `python3 -m slowapp_sdk validate|fixture|catalog`, the manifest and catalog schemas
 example/                       the moon app, the images' smoke test (the template repo's twin); example/ui its UI
 js/                            @slowboard/app, app-react, ui and dev (npm workspaces; package.json at the root)

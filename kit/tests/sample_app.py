@@ -40,5 +40,35 @@ def event(ctx):
     kit.atomic_write(ctx.out / "events.json", json.dumps(ctx.events()))
 
 
+@kit.job("remote")
+def remote(ctx):
+    """A cloud hub run's job (test_remote): reads /in and /data, writes /out, /data and /cache, and
+    exits as /in/settings.json says."""
+    print("remote job: to stdout", flush=True)
+    kit.log("remote job: to stderr")
+    s = ctx.settings
+    count = ctx.data / "count.txt"
+    n = int(count.read_text()) + 1 if count.exists() else 1
+    count.write_text(str(n))
+    if s.get("big_kb"):
+        (ctx.data / "big.bin").write_bytes(b"x" * (s["big_kb"] * 1024))
+    (ctx.cache / "scratch").write_text("cache")
+    if s.get("sleep"):
+        import time
+        time.sleep(s["sleep"])
+    img = Image.new("RGB", (452, 444), WHITE)
+    ctx.write_feed("left", [Card("home", img, "Hi")])
+    import os
+    kit.atomic_write(ctx.out / "seen.json", json.dumps({
+        "settings": s, "docs": ctx.docs, "count": n, "in": str(ctx.inp), "data": str(ctx.data),
+        "cache": str(ctx.cache), "remote_env": sorted(k for k in os.environ if k.startswith("SLOWAPP_REMOTE"))}))
+    if s.get("exit") == 3:
+        raise kit.Unchanged("same")
+    if s.get("exit") == 5:
+        raise kit.NeedsConfig("no key")
+    if s.get("exit") == 1:
+        raise RuntimeError("bug")
+
+
 if __name__ == "__main__":
     kit.main()

@@ -1,0 +1,5 @@
+#!/bin/sh
+# slowapp-remote job <name>: one job with its /in, /out and /data through presigned links (the
+# cloud hub's Fly Machines; MANIFEST.md, "Remote runs"). A kit app whose ENTRYPOINT is kept gets
+# this argv itself; this script is for images without one, and needs SLOWAPP_ENTRYPOINT.
+exec python3 -m slowapp_kit.remote "$@"
