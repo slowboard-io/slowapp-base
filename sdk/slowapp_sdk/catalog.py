@@ -72,8 +72,16 @@ def save_png(img, path, ink_set="k4"):
         to_indexed(img).save(path, "PNG", bits=2, optimize=False)
 
 
-def inks(img):
-    used = {INK_NAMES.get(c, "grey") for _, c in img.getcolors(1 << 16)}
+def inks(img, ink_set="k4"):
+    """The inks a screen uses. Only a g16 screen has greys; any other colour is an error."""
+    used = set()
+    for _, c in img.convert("RGB").getcolors(1 << 16):
+        name = INK_NAMES.get(c)
+        if name is None and ink_set == "g16" and c[0] == c[1] == c[2] and c[0] % 17 == 0:
+            name = "grey"
+        if name is None:
+            raise ValueError(f"colour {c} isn't a {ink_set} ink")
+        used.add(name)
     return [i for i in INK_ORDER if i in used]
 
 
@@ -268,7 +276,7 @@ def cmd_build(a):
                 else:
                     kind = c.get("kind", "detail")
                 s = {"example": ex["name"], "feed": f, "surface": surface, "card": c["id"], "kind": kind,
-                     "title": c["title"], "file": rel, "sha256": sha256(out_dir / rel), "inks": inks(img)}
+                     "title": c["title"], "file": rel, "sha256": sha256(out_dir / rel), "inks": inks(img, ink_set(surface))}
                 if kind == "answer":
                     s["binding"] = ".".join(c["id"].rsplit(".", 2)[-2:])
                 screens.append(s)

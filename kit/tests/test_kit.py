@@ -359,6 +359,13 @@ class Net(Env):
         c3.fetch("a.json", lambda: {"t": 2})
         c3.exit_if_unchanged()                                # changed: carries on
         # the live snapshot is the fixture
+        kit.net.remember(c3)
+        # contract 5: another device's run of the same job, on the same data, isn't unchanged
+        dev = json.dumps({"id": "supernote", "profile": "supernote", "w": 1404, "h": 1872, "inks": "g16"})
+        d = self.ctx(SLOWAPP_DEVICE=dev)
+        d.fetch("a.json", lambda: {"t": 2})
+        d.exit_if_unchanged()
+        self.assertNotEqual(kit.net.snapshot_hash(d), kit.net.snapshot_hash(c3))
         f = self.ctx(SLOWAPP_MODE="fixture")
         self.assertEqual(f.fetch("a.json", lambda: self.fail("fn must not run in fixture mode")), {"t": 2})
         with self.assertRaises(kit.ContractError):

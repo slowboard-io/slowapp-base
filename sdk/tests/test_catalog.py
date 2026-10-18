@@ -287,7 +287,9 @@ class Build(unittest.TestCase):
             catalog.save_png(img, Path(d) / "s.png", "g16")
             data = (Path(d) / "s.png").read_bytes()
         self.assertEqual((data[24], data[25]), (8, 0))
-        self.assertEqual(catalog.inks(img), ["white", "grey"])
+        self.assertEqual(catalog.inks(img, "g16"), ["white", "grey"])
+        with self.assertRaises(ValueError):          # a k4 screen has no greys
+            catalog.inks(img)
 
 
 class Check(unittest.TestCase):
