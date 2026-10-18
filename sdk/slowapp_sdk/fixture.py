@@ -35,6 +35,7 @@ from . import validate
 SLOTS = {"left": (0, "red"), "middle": (452, "yellow"), "right": (908, "black")}   # the default layout
 SLOT_W = {"left": 452, "middle": 456, "right": 452}
 PANEL_W, PANEL_H, STRIP_H = 1360, 480, 36
+FULL = "full"   # the whole panel as one slot
 EXIT_NAMES = {0: "ok", 3: "unchanged", 4: "transient", 5: "needs config", 64: "contract error", 137: "killed"}
 
 
@@ -233,29 +234,41 @@ def check_prompts(out, surface, size):
     return {"deck": {"cards": cards}, "cards": got, "prompts": True}
 
 
-def frame(res):
-    """Home cards spliced into a white full frame, strips left blank (slowbd draws them). A feed
-    named after a slot goes there; any other takes the next free slot whose width matches."""
-    img = Image.new("RGB", (PANEL_W, PANEL_H), (255, 255, 255))
+def place(res):
+    """Feed -> slot for the default layout: a feed named after a slot goes there; any other takes
+    the next free slot whose width matches its home card. A feed as wide as the panel is the whole
+    panel (FULL, one slot) and nothing else shows. Prompts are overlays, never placed."""
     res = {f: r for f, r in res.items() if not r.get("prompts")}
+    homes = {f: r["cards"][r["deck"]["cards"][0]["id"]][0] for f, r in res.items()}
+    for f, home in homes.items():
+        if home.width == PANEL_W:
+            return {f: FULL}
     free = list(SLOTS)
     placed = {f: f for f in res if f in SLOTS}
     for f in placed:
         free.remove(f)
-    for feed, r in res.items():
-        if feed not in placed:
-            home = r["cards"][r["deck"]["cards"][0]["id"]][0]
+    for f, home in homes.items():
+        if f not in placed:
             fits = [s for s in free if SLOT_W[s] == home.width]
             if fits:
-                placed[feed] = fits[0]
+                placed[f] = fits[0]
                 free.remove(fits[0])
+    return placed
+
+
+def frame(res):
+    """Home cards spliced into a white full frame, strips left blank (slowbd draws them), placed
+    as place() says."""
+    img = Image.new("RGB", (PANEL_W, PANEL_H), (255, 255, 255))
+    placed = place(res)
     for feed, slot in placed.items():
         r = res[feed]
         home = r["deck"]["cards"][0]["id"]
-        img.paste(r["cards"][home][0], (SLOTS[slot][0], 0))
-    for x in (451, 907):
-        for y in range(PANEL_H - STRIP_H, PANEL_H, 2):
-            img.putpixel((x, y), (0, 0, 0))
+        img.paste(r["cards"][home][0], (0 if slot == FULL else SLOTS[slot][0], 0))
+    if FULL not in placed.values():
+        for x in (451, 907):
+            for y in range(PANEL_H - STRIP_H, PANEL_H, 2):
+                img.putpixel((x, y), (0, 0, 0))
     return img
 
 

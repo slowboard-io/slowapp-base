@@ -5,6 +5,7 @@ Reads manifests and streams layers over the distribution API with the standard t
 otherwise). Per platform it reports what a hub downloads, what that unpacks to, and how much of
 both a hub that already has the base image doesn't have yet. Standard library only.
 """
+import http.client
 import json
 import os
 import re
@@ -20,6 +21,11 @@ PLATFORMS = ("linux/arm/v7", "linux/arm64", "linux/amd64")
 
 class RegistryError(Exception):
     pass
+
+
+# What a request or a body read can fail with besides an HTTP status: URLError and timeouts are
+# OSErrors, a cut-off body is an HTTPException, a bad document a ValueError, a bad gzip zlib.error.
+NET_ERRORS = (OSError, http.client.HTTPException, ValueError, zlib.error)
 
 
 def parse_ref(ref):
@@ -55,13 +61,18 @@ class Registry:
         if creds:
             import base64
             req.add_unredirected_header("Authorization", "Basic " + base64.b64encode(f"{creds[0]}:{creds[1]}".encode()).decode())
-        with urllib.request.urlopen(req, timeout=60) as r:
-            doc = json.load(r)
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                doc = json.load(r)
+        except urllib.error.HTTPError as e:
+            raise RegistryError(f"{self.registry}: token: HTTP {e.code}") from None
+        except NET_ERRORS as e:
+            raise RegistryError(f"{self.registry}: token: {e}") from None
         self.token = doc.get("token") or doc.get("access_token")
 
-    def open(self, path, accept=None):
+    def open(self, path, accept=None, headers=None):
         for attempt in (0, 1):
-            req = urllib.request.Request(f"{self.base}/{path}")
+            req = urllib.request.Request(f"{self.base}/{path}", headers=headers or {})
             if accept:
                 req.add_header("Accept", accept)
             if self.token:
@@ -74,24 +85,51 @@ class Registry:
                     self._authenticate(e.headers.get("WWW-Authenticate", ""))
                     continue
                 raise RegistryError(f"{self.registry}/{self.repo}/{path}: HTTP {e.code}") from None
+            except NET_ERRORS as e:
+                raise RegistryError(f"{self.registry}/{self.repo}/{path}: {e}") from None
 
     def manifest(self, reference):
-        with self.open(f"manifests/{reference}", ACCEPT) as r:
-            return json.load(r)
+        path = f"manifests/{reference}"
+        try:
+            with self.open(path, ACCEPT) as r:
+                return json.load(r)
+        except NET_ERRORS as e:
+            raise RegistryError(f"{self.registry}/{self.repo}/{path}: {e}") from None
 
     def unpacked(self, layer):
-        """Bytes a layer unpacks to (streamed, nothing kept), or None for a compression we don't read."""
+        """Bytes a layer unpacks to, or None for a compression we don't read. Read from the gzip
+        trailer when the registry serves a range, else by streaming the layer (nothing kept)."""
         mt = layer.get("mediaType", "")
         if mt.endswith("tar"):
             return layer["size"]
         if not (mt.endswith("gzip") or mt.endswith("tar.gzip") or "gzip" in mt):
             return None
-        d, n = zlib.decompressobj(16 + zlib.MAX_WBITS), 0
-        with self.open(f"blobs/{layer['digest']}") as r:
-            while chunk := r.read(1 << 20):
-                n += len(d.decompress(chunk))
-            n += len(d.flush())
-        return n
+        path = f"blobs/{layer['digest']}"
+        try:
+            n = self.isize(path, layer["size"])
+            if n is not None:
+                return n
+            d, n = zlib.decompressobj(16 + zlib.MAX_WBITS), 0
+            with self.open(path) as r:
+                while chunk := r.read(1 << 20):
+                    n += len(d.decompress(chunk))
+                n += len(d.flush())
+            return n
+        except NET_ERRORS as e:
+            raise RegistryError(f"{self.registry}/{self.repo}/{path}: {e}") from None
+
+    def isize(self, path, size):
+        """A gzip's last 4 bytes: what it unpacks to, mod 4 GiB, for its last member only. Trusted
+        only from a 206 and when at least the compressed size (a layer of several members, like
+        estargz's, ends in a tiny one); otherwise None and the caller streams the layer."""
+        if size < 18:
+            return None
+        with self.open(path, headers={"Range": f"bytes={size - 4}-{size - 1}"}) as r:
+            if r.status != 206:
+                return None
+            tail = r.read(5)
+        n = int.from_bytes(tail, "little") if len(tail) == 4 else 0
+        return n if n >= size else None
 
 
 def platform_name(p):

@@ -226,7 +226,7 @@
     "surface": {"type": "string", "pattern": "^[0-9]{1,4}x[0-9]{1,4}\\.(k4|g16)$"},
     "ink": {"enum": ["black", "white", "yellow", "red"]},
     "kind": {"enum": ["home", "detail", "ask", "answer"]},
-    "file": {"type": "string", "pattern": "^screens/[A-Za-z0-9._/-]+\\.png$"},
+    "file": {"type": "string", "pattern": "^screens/[A-Za-z0-9._/~-]+\\.png$"},
     "strings": {"type": "array", "uniqueItems": true, "items": {"type": "string"}}
   }
 }

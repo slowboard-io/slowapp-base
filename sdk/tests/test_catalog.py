@@ -61,10 +61,11 @@ INKS = [(255, 255, 255), (0, 0, 0), (255, 0, 0), (255, 255, 0)]
 
 class FakeRuns:
     """Stands in for fixture.run_example: writes /out for the surfaces asked. The map can't draw
-    the whole panel (it writes nothing there); `flaky` makes every second run differ."""
+    the whole panel (it writes nothing there); `flaky` makes every second run differ; nor can it
+    in an example at a surface in `broken` ({(example, surface)}). `ids`: the cards' ids."""
 
-    def __init__(self, flaky=False):
-        self.calls, self.flaky = [], flaky
+    def __init__(self, flaky=False, broken=(), ids=("c0", "c1")):
+        self.calls, self.flaky, self.broken, self.ids = [], flaky, set(broken), ids
 
     def __call__(self, app_dir, m, ex, image):
         self.calls.append(dict(ex["feeds"]))
@@ -82,7 +83,7 @@ class FakeRuns:
                     "until": "2026-10-01T13:00:00-07:00", "slot_hint": "middle", "ask": "prompts/p1/ask.png",
                     "bindings": {"own.tap": {"strip": "Done", "show": "prompts/p1/done.png"}}}]}))
                 continue
-            if feed == "map" and w == 1360:
+            if feed == "map" and (w == 1360 or (ex["name"], surface) in self.broken):
                 continue
             d = out / "feeds" / feed
             (d / "cards").mkdir(parents=True)
@@ -90,17 +91,26 @@ class FakeRuns:
             for i, kind in enumerate(("home", "detail")):
                 img = Image.new("RGB", (w, h), (255, 255, 255))
                 img.paste(shade if i == 0 else (255, 0, 0), (10, 10, 60, 60))
-                (d / "cards" / f"c{i}.png").write_bytes(encode_png(img))
-                cards.append({"id": f"c{i}", "title": f"{feed} {i}", "kind": kind})
+                (d / "cards" / f"{self.ids[i]}.png").write_bytes(encode_png(img))
+                cards.append({"id": self.ids[i], "title": f"{feed} {i}", "kind": kind})
             (d / "deck.json").write_text(json.dumps({"cards": cards, "valid_from": "2026-10-01T12:00:00-07:00",
                                                      "valid_until": "2026-10-01T13:00:00-07:00"}))
         (out / ".metrics.json").write_text(json.dumps({"memory_peak_kb": 1234}))
         return out, 0.5, ""
 
 
-def app_dir(root):
+DUSK = """
+[[example]]
+name = "dusk"
+fixture = "fixtures/noon"
+now = "2026-10-01T19:00:00-07:00"
+feeds = { map = "456x444.k4", legend = "452x444.k4" }
+"""
+
+
+def app_dir(root, extra=""):
     (root / "fixtures" / "noon").mkdir(parents=True)
-    (root / "slowapp.toml").write_text(MANIFEST)
+    (root / "slowapp.toml").write_text(MANIFEST + extra)
     return root
 
 
@@ -150,6 +160,48 @@ class Build(unittest.TestCase):
         img = Image.open(self.root / "out" / ex["frames"][1]["file"]).convert("RGB")
         self.assertEqual(img.getpixel((600, 200)), (255, 255, 0))
 
+    def test_a_size_another_example_fails_at_drops_the_screens_there(self):
+        root = app_dir(Path(tempfile.mkdtemp()), DUSK)
+        self.addCleanup(shutil.rmtree, root, True)
+        rc, log = build(root, FakeRuns(broken={("dusk", "452x444.k4")}))
+        self.assertEqual(rc, 0, log)
+        cat = json.loads((root / "out" / "catalog.json").read_text())
+        m = next(f for f in cat["feeds"] if f["name"] == "map")
+        self.assertEqual(m["supported"], ["456x444.k4"])
+        self.assertIn("dusk:", m["surfaces"]["452x444.k4"]["error"])
+        self.assertFalse([s for s in cat["screens"] if s["feed"] == "map" and s["surface"] == "452x444.k4"])
+        self.assertFalse(list((root / "out" / "screens" / "noon" / "452x444.k4").glob("map/*.png")))
+        self.assertEqual(catalog.check(root / "out"), [])
+
+    def test_screen_names_dont_collide(self):
+        rc, log = build(self.root, FakeRuns(ids=("x:1", "x_1")))
+        self.assertEqual(rc, 0, log)
+        cat = json.loads((self.root / "out" / "catalog.json").read_text())
+        files = [s["file"] for s in cat["screens"]]
+        self.assertEqual(len(files), len(set(files)))
+        self.assertIn("screens/noon/456x444.k4/map/x_1~2.png", files)
+        self.assertEqual(catalog.check(self.root / "out"), [])
+
+    def test_prompts_json_of_an_example_without_the_prompts_feed_is_ignored(self):
+        m = catalog.manifest(self.root)
+        ex = dict(m["example"][0])
+        runs = FakeRuns()
+        surfaces = {"map": "456x444.k4", "legend": "452x444.k4"}
+
+        def stray(app_dir, m, ex, image):   # the app writes prompts.json anyway
+            return runs(app_dir, m, {**ex, "feeds": {**ex["feeds"], "prompts": "452x444.k4"}}, image)
+        with mock.patch.object(catalog, "run_example", stray):
+            res, _, _, prompts = catalog.render(self.root, m, ex, "img", surfaces)
+        self.assertIsNone(prompts)
+        self.assertEqual(set(res), {"map", "legend"})
+
+    def test_a_ui_image_that_cant_be_created_is_a_failure_not_a_crash(self):
+        m = {"ui": {"entry": "/ui/index.html"}}
+        with mock.patch.object(catalog.subprocess, "run", lambda *a, **k: SimpleNamespace(
+                returncode=1, stdout="", stderr="no such image")), mock.patch.object(catalog, "engine", lambda: "docker"):
+            with self.assertRaisesRegex(catalog.Fail, "no such image"):
+                catalog.ui_bundle(m, "img")
+
     def test_two_renders_that_differ_fail_the_build(self):
         rc, log = build(self.root, FakeRuns(flaky=True))
         self.assertEqual(rc, 1)
@@ -177,6 +229,47 @@ class Build(unittest.TestCase):
         self.assertEqual(seen["spec"]["slots"]["middle"]["strip"],
                          {"kind": "armed", "key": "yellow", "next": "Wind", "n": 2, "cur": 0, "hold_home": False})
         self.assertEqual(seen["spec"]["slots"]["middle"]["body"], "middle.png")
+        self.assertNotIn("layout", seen["spec"])
+
+    def compose_specs(self, res, prompts):
+        specs = []
+
+        def fake_run(cmd, capture_output, timeout):
+            work = Path(cmd[cmd.index("-v") + 1].split(":")[0])
+            specs.append(json.loads((work / "spec.json").read_text()))
+            Image.new("RGB", (1360, 480), (255, 255, 255)).save(work / "out.png")
+            return SimpleNamespace(returncode=0, stderr=b"")
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(catalog.subprocess, "run", fake_run), \
+                mock.patch.object(catalog, "engine", lambda: "docker"), contextlib.redirect_stdout(io.StringIO()):
+            fr = catalog.frames(Path(d), {"name": "x"}, res, prompts, catalog.Composer(slowd_image="s"))
+        return fr, specs
+
+    @staticmethod
+    def feed(w):
+        return {"deck": {"cards": [{"id": "a", "title": "A"}]}, "cards": {"a": (Image.new("RGB", (w, 444)), "x")}}
+
+    @staticmethod
+    def prompt(w, hint):
+        return ({"deck": {"cards": [{"id": "p.ask", "title": "Q"}]}, "cards": {"p.ask": (Image.new("RGB", (w, 444)), "y")},
+                 "prompts": True}, {"prompts": [{"id": "p", "question": "Q", "slot_hint": hint, "ask": "prompts/p/ask.png"}]})
+
+    def test_a_whole_panel_feed_fills_the_full_panel_picture(self):
+        fr, specs = self.compose_specs({"map": self.feed(1360)}, None)
+        self.assertEqual(specs[0]["layout"]["slots"], [{"id": "full", "x0": 0, "x1": 1359, "key": "red"}])
+        self.assertEqual(list(specs[0]["slots"]), ["full"])
+        self.assertEqual(catalog.place({"map": self.feed(1360)}), {"map": "full"})
+        img = catalog.frame({"map": self.feed(1360)})
+        self.assertEqual(img.getpixel((700, 100)), (0, 0, 0))
+
+    def test_a_prompt_card_too_wide_for_its_hinted_slot_goes_where_it_fits(self):
+        pr, prompts = self.prompt(456, "left")
+        fr, specs = self.compose_specs({"map": self.feed(452), "prompts": pr}, prompts)
+        self.assertEqual(specs[1]["slots"]["middle"]["strip"]["kind"], "prompt")
+        self.assertEqual(specs[1]["slots"]["left"]["strip"]["kind"], "single")
+        # On a whole-panel layout no slot takes a third's card: the picture is skipped.
+        pr, prompts = self.prompt(452, "middle")
+        fr, specs = self.compose_specs({"map": self.feed(1360), "prompts": pr}, prompts)
+        self.assertEqual([f["kind"] for f in fr], ["home"])
 
 
 class Check(unittest.TestCase):
@@ -221,7 +314,7 @@ class Check(unittest.TestCase):
 
     def test_a_tampered_screen_is_caught(self):
         b = self.copy()
-        f = next((b / "screens").rglob("map-c0.png"))
+        f = next(p for p in (b / "screens").rglob("c0.png") if p.parent.name == "map")
         with Image.open(f) as im:
             size = im.size
         Image.new("RGB", size, (0, 0, 0)).save(f)
@@ -258,9 +351,19 @@ class Release(unittest.TestCase):
             self.assertIsNone(catalog.changelog_for(p, "0.3"))
 
     def test_base_from_dockerfile(self):
-        with tempfile.TemporaryDirectory() as d:
-            (Path(d) / "Dockerfile").write_text("# x\nARG A=1\nfrom ghcr.io/o/base:1.2.0@sha256:" + "a" * 64 + " AS b\n")
-            self.assertEqual(catalog.base_of(Path(d) / "Dockerfile"), "ghcr.io/o/base:1.2.0@sha256:" + "a" * 64)
+        pin = "ghcr.io/o/base:1.2.0@sha256:" + "a" * 64
+        cases = [
+            ("# x\nARG A=1\nfrom " + pin + " AS b\n", pin),
+            ("ARG BASE=slowapp-python:dev\nFROM ${BASE}\n", "slowapp-python:dev"),
+            # A UI stage first, --platform, quoted ARGs, and a final stage built on an earlier one.
+            ('ARG REG="ghcr.io/o"\nARG TAG=1.2.0\nFROM --platform=$BUILDPLATFORM node:22 AS ui\n'
+             "RUN npm ci\nFROM $REG/base:${TAG}@sha256:" + "a" * 64 + " AS App\nARG TAG=9\nFROM app\n", pin),
+        ]
+        for text, want in cases:
+            with tempfile.TemporaryDirectory() as d:
+                (Path(d) / "Dockerfile").write_text(text)
+                self.assertEqual(catalog.base_of(Path(d) / "Dockerfile"), want, text)
+        self.assertEqual(catalog.base_of(HERE.parent.parent / "example" / "Dockerfile"), "slowapp-python:dev")
 
 
 APP = "sha256:" + "c" * 64
@@ -292,6 +395,55 @@ class Sizes(unittest.TestCase):
             s = oci.sizes("ghcr.io/o/app@" + APP, base="ghcr.io/o/base:1.2.0")
         self.assertEqual(s, {"linux/arm/v7": {"download": 160, "adds_download": 60, "layers": 2, "shared_layers": 1,
                                               "unpacked": 450, "adds_unpacked": 150}})
+
+
+class Network(unittest.TestCase):
+    def test_network_errors_are_registry_errors(self):
+        import urllib.error
+        reg = oci.Registry("ghcr.io", "o/app")
+        for err in (urllib.error.URLError("no route"), TimeoutError("timed out")):
+            with mock.patch.object(oci.urllib.request, "urlopen", side_effect=err):
+                with self.assertRaisesRegex(oci.RegistryError, "ghcr.io/o/app/manifests/1"):
+                    reg.manifest("1")
+        with mock.patch.object(oci.urllib.request, "urlopen", side_effect=urllib.error.URLError("dns")):
+            with self.assertRaisesRegex(oci.RegistryError, "token"):
+                reg._authenticate('Bearer realm="https://ghcr.io/token",service="ghcr.io"')
+
+    def test_a_layer_cut_off_mid_stream_is_a_registry_error(self):
+        import http.client
+
+        class Cut(io.BytesIO):
+            status = 200
+
+            def read(self, n=-1):
+                raise http.client.IncompleteRead(b"")
+        reg = oci.Registry("ghcr.io", "o/app")
+        with mock.patch.object(reg, "open", lambda path, accept=None, headers=None: Cut()):
+            with self.assertRaises(oci.RegistryError):
+                reg.unpacked(layer("sha256:1", 100))
+
+    def test_unpacked_size_from_the_gzip_trailer(self):
+        import gzip
+        data = gzip.compress(b"x" * 100000)
+        reg = oci.Registry("ghcr.io", "o/app")
+
+        def fake_open(path, accept=None, headers=None):
+            r = io.BytesIO(data)
+            if headers and "Range" in headers:
+                a, b = (int(v) for v in headers["Range"][6:].split("-"))
+                r, r.status = io.BytesIO(data[a:b + 1]), 206
+            else:
+                r.status = 200
+            return r
+        with mock.patch.object(reg, "open", fake_open):
+            self.assertEqual(reg.unpacked(layer("sha256:1", len(data))), 100000)
+        # A registry that ignores the range: the layer is streamed instead.
+        with mock.patch.object(reg, "open", lambda path, accept=None, headers=None: _Body(data)):
+            self.assertEqual(reg.unpacked(layer("sha256:1", len(data))), 100000)
+
+
+class _Body(io.BytesIO):
+    status = 200
 
 
 if __name__ == "__main__":

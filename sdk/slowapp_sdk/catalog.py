@@ -35,14 +35,21 @@ from PIL import Image
 from slowapp_kit.inks import encode_png, to_indexed
 
 from . import __version__, validate
-from .fixture import Fail, SLOTS, SLOT_W, check_feed, engine, frame, manifest, run_example, safe_file
+from .fixture import (FULL, PANEL_W, SLOTS, SLOT_W, STRIP_H, Fail, check_feed, engine, frame, manifest, place,
+                      run_example, safe_file)
 
 CATALOG = 1
 SCHEMA = Path(__file__).resolve().parent / "schema" / "catalog.schema.json"
 # What a `slot` feed may be given on a Lyra: either width of a third, and the whole panel (one slot).
 STANDARD_SURFACES = ("452x444.k4", "456x444.k4", "1360x444.k4")
-KEYS = {"left": "red", "middle": "yellow", "right": "black"}   # the default layout's slot keys
+KEYS = {"left": "red", "middle": "yellow", "right": "black", FULL: "red"}   # the layouts' slot keys
 SPARE = "white"
+WIDTH = {**SLOT_W, FULL: PANEL_W}
+X0 = {**{s: x for s, (x, _) in SLOTS.items()}, FULL: 0}
+# `slowd compose`'s layout for a feed that is the whole panel (the default is the three thirds).
+FULL_LAYOUT = {"strip_h": STRIP_H, "spare_key": SPARE, "prompt_slot": FULL,
+               "slots": [{"id": FULL, "x0": 0, "x1": PANEL_W - 1, "key": KEYS[FULL]}]}
+CENTRE_SLACK = 8                # slowd centres a body up to this much narrower than its slot
 INK_NAMES = {(0, 0, 0): "black", (255, 255, 255): "white", (255, 255, 0): "yellow", (255, 0, 0): "red"}
 INK_ORDER = ("black", "white", "yellow", "red")
 MAX_UI_GZIP = 512 * 1024        # the registry's rule for a UI bundle (the hub serves up to 2 MB)
@@ -96,7 +103,9 @@ def render(app_dir, m, example, image, surfaces):
             if ida != idb:
                 raise NotDeterministic(f"{f} at {surfaces[f]}: the two renders differ\n{ida}\n{idb}")
         metrics = json.loads((out / ".metrics.json").read_text()) if (out / ".metrics.json").exists() else {}
-        prompts = json.loads((out / "prompts.json").read_text()) if (out / "prompts.json").exists() else None
+        # Only an example that lists the prompts feed has its prompts.json checked (and shown).
+        prompts = json.loads((out / "prompts.json").read_text()) \
+            if "prompts" in surfaces and (out / "prompts.json").exists() else None
         return res, took, metrics, prompts
     finally:
         for o in outs:
@@ -111,24 +120,6 @@ def reason(err):
     """A failed run in one line: the exit, and the last thing the app said."""
     lines = [l.strip() for l in str(err).splitlines() if l.strip()]
     return (lines[0] + (f": {lines[-1]}" if len(lines) > 1 else ""))[:300] if lines else "failed"
-
-
-def slot_of(feeds_res):
-    """Feed -> slot for the default layout, as fixture.frame places them."""
-    free, placed = list(SLOTS), {}
-    for f in feeds_res:
-        if f in SLOTS:
-            placed[f] = f
-            free.remove(f)
-    for f, r in feeds_res.items():
-        if f in placed or r.get("prompts"):
-            continue
-        home = r["cards"][r["deck"]["cards"][0]["id"]][0]
-        fits = [s for s in free if SLOT_W[s] == home.width]
-        if fits:
-            placed[f] = fits[0]
-            free.remove(fits[0])
-    return placed
 
 
 def home_strip(deck, slot):
@@ -149,14 +140,15 @@ class Composer:
     def strips(self):
         return bool(self.image or self.bin)
 
-    def compose(self, slots, dest, fallback):
-        """slots: {slot: {"body": Image or None, "strip": spec}} -> writes dest (PNG)."""
+    def compose(self, slots, dest, fallback, layout=None):
+        """slots: {slot: {"body": Image or None, "strip": spec}} -> writes dest (PNG). `layout`:
+        slowd's, if not the default three thirds."""
         if not self.strips:
             save_png(fallback(), dest)
             return
         tmp = Path(tempfile.mkdtemp(prefix="sb-compose-"))
         try:
-            spec = {"slots": {}}
+            spec = {"slots": {}, **({"layout": layout} if layout else {})}
             for s, v in slots.items():
                 e = {"strip": v["strip"]}
                 if v.get("body") is not None:
@@ -203,7 +195,10 @@ def ui_bundle(m, image):
         return None
     eng, tmp = engine(), Path(tempfile.mkdtemp(prefix="sb-ui-"))
     try:
-        cid = subprocess.run([eng, "create", image], capture_output=True, text=True, check=True).stdout.strip()
+        p = subprocess.run([eng, "create", image], capture_output=True, text=True)
+        if p.returncode:
+            raise Fail(f"[ui] can't create a container from {image}: {p.stderr.strip()}")
+        cid = p.stdout.strip()
         try:
             p = subprocess.run([eng, "cp", f"{cid}:{entry}", str(tmp / "ui.html")], capture_output=True, text=True)
             if p.returncode:
@@ -239,7 +234,7 @@ def cmd_build(a):
         print("note  no --slowd-image or --slowd: full-panel pictures get blank strips")
     plat = os.environ.get("SLOWAPP_PLATFORM") or "linux/" + {"x86_64": "amd64", "aarch64": "arm64", "arm64": "arm64"}.get(os.uname().machine, os.uname().machine)
     screens, examples, support, failed = [], [], {}, 0
-    seen = set()
+    seen, names = set(), set()
 
     def add_screens(ex, res):
         for f, r in res.items():
@@ -251,7 +246,13 @@ def cmd_build(a):
             seen.add((ex["name"], f, surface))
             for c in r["deck"]["cards"]:
                 img = r["cards"][c["id"]][0]
-                rel = f"screens/{safe_file(ex['name'])}/{surface.split('.')[0]}/{safe_file(f)}-{safe_file(c['id'])}.png"
+                # Card ids may carry characters safe_file maps to '_' (prompt ids carry ':'), so a
+                # name already taken gets ~N, which safe_file never leaves in one.
+                rel, n = f"screens/{ex['name']}/{surface}/{f}/{safe_file(c['id'])}.png", 1
+                while rel in names:
+                    n += 1
+                    rel = f"screens/{ex['name']}/{surface}/{f}/{safe_file(c['id'])}~{n}.png"
+                names.add(rel)
                 (out_dir / rel).parent.mkdir(parents=True, exist_ok=True)
                 save_png(img, out_dir / rel)
                 if r.get("prompts"):
@@ -318,9 +319,9 @@ def cmd_build(a):
                 print(f"      {ex['name']:16} at {s}: unsupported ({why})")
         examples.append(e)
 
-    feed_rows = []
-    for name, f in feeds.items():
-        surfaces = {}
+    rows = {}
+    for name in feeds:
+        surfaces = rows[name] = {}
         order = lambda kv: (STANDARD_SURFACES.index(kv[0]) if kv[0] in STANDARD_SURFACES else 99, kv[0])  # noqa: E731
         for s, runs in sorted(support.get(name, {}).items(), key=order):
             # Per example, one good render at a size is enough: a run that gives every slot feed
@@ -328,6 +329,14 @@ def cmd_build(a):
             good = {ex for ex, err in runs if err is None}
             errs = sorted({f"{ex}: {err}" for ex, err in runs if err and ex not in good})
             surfaces[s] = {"ok": not errs, **({"error": "; ".join(errs)[:1000]} if errs else {})}
+    # A screen from a good render at a size another example fails at: the size is unsupported, so
+    # the screen goes (check() takes screens only at supported sizes).
+    for x in [x for x in screens if not rows[x["feed"]].get(x["surface"], {}).get("ok")]:
+        screens.remove(x)
+        (out_dir / x["file"]).unlink(missing_ok=True)
+    feed_rows = []
+    for name, f in feeds.items():
+        surfaces = rows[name]
         mine = [x for x in screens if x["feed"] == name]
         # Screens per example at its own size: the most any example shows, by kind.
         counts = {}
@@ -379,24 +388,32 @@ def cmd_build(a):
 def frames(out_dir, ex, res, prompts, comp):
     """The full-panel pictures of one example: its home cards with their strips, and, if it asks
     a question, the first prompt on its slot."""
-    feeds_res = {f: r for f, r in res.items()}
-    placed = slot_of(feeds_res)
+    placed = place(res)
+    full = FULL in placed.values()
+    layout = FULL_LAYOUT if full else None
     slots = {}
     for f, s in placed.items():
-        r = feeds_res[f]
+        r = res[f]
         home = r["deck"]["cards"][0]["id"]
         slots[s] = {"body": r["cards"][home][0], "strip": home_strip(r["deck"], s)}
     out = []
-    name = safe_file(ex["name"])
+    name = ex["name"]
     rel = f"screens/{name}/panel-home.png"
     (out_dir / rel).parent.mkdir(parents=True, exist_ok=True)
-    comp.compose(slots, out_dir / rel, lambda: frame(res))
+    comp.compose(slots, out_dir / rel, lambda: frame(res), layout)
     out.append({"kind": "home", "file": rel, "sha256": sha256(out_dir / rel), "strips": comp.strips})
     if prompts and prompts.get("prompts"):
         q = prompts["prompts"][0]
-        slot = q.get("slot_hint") if q.get("slot_hint") in SLOTS else "right"
-        pr = feeds_res["prompts"]
-        body = pr["cards"][f"{q['id']}.ask"][0] if q.get("ask") is not None else (slots.get(slot) or {}).get("body")
+        ask = res["prompts"]["cards"][f"{q['id']}.ask"][0] if q.get("ask") is not None else None
+        # The hinted slot (else the layout's prompt slot), or the first one the card fits.
+        ids = [FULL] if full else list(SLOTS)
+        hint = q.get("slot_hint") if q.get("slot_hint") in ids else ids[-1]
+        fit = [s for s in [hint] + ids if ask is None or 0 <= WIDTH[s] - ask.width <= CENTRE_SLACK]
+        if not fit:
+            print(f"note  {name}: no slot fits prompt {q['id']}'s {ask.width} px card; no prompt picture")
+            return out
+        slot = fit[0]
+        body = ask if ask is not None else (slots.get(slot) or {}).get("body")
         ps = dict(slots)
         ps[slot] = {"body": body, "strip": {"kind": "prompt", "key": KEYS[slot], "spare": SPARE,
                                              "question": q["question"], "answers_only": q.get("ask") is not None}}
@@ -405,9 +422,10 @@ def frames(out_dir, ex, res, prompts, comp):
         def flat():
             img = frame(res)
             if body is not None:
-                img.paste(body, (SLOTS[slot][0], 0))
+                img.paste((255, 255, 255), (X0[slot], 0, X0[slot] + WIDTH[slot], body.height))
+                img.paste(body, (X0[slot] + (WIDTH[slot] - body.width) // 2, 0))
             return img
-        comp.compose(ps, out_dir / rel, flat)
+        comp.compose(ps, out_dir / rel, flat, layout)
         out.append({"kind": "prompt", "file": rel, "sha256": sha256(out_dir / rel), "strips": comp.strips,
                     "prompt": q["id"]})
     return out
@@ -434,11 +452,27 @@ def report(cat):
 # ------------------------------------------------------------------ release
 
 def base_of(dockerfile):
+    """The image the final stage builds on: the last FROM, past its --flags, with the ARG defaults
+    declared before the first FROM filled in and an earlier stage's name followed to its image.
+    app.yml's BASE_OF awk does the same."""
+    args, stages, base = {}, {}, None
     for line in Path(dockerfile).read_text().splitlines():
         parts = line.split()
-        if parts and parts[0].upper() == "FROM" and len(parts) > 1:
-            return parts[1]
-    return None
+        if not parts:
+            continue
+        if parts[0].upper() == "ARG" and base is None and len(parts) > 1:
+            k, eq, v = parts[1].partition("=")
+            if eq:
+                args[k] = v.strip("\"'")
+        elif parts[0].upper() == "FROM":
+            rest = [w for w in parts[1:] if not w.startswith("--")]
+            if not rest:
+                continue
+            img = re.sub(r"\$\{(\w+)\}|\$(\w+)", lambda mt: args.get(mt[1] or mt[2], mt[0]), rest[0])
+            base = stages.get(img.lower(), img)
+            if len(rest) > 2 and rest[1].upper() == "AS":
+                stages[rest[2].lower()] = base
+    return base
 
 
 def changelog_for(path, version):

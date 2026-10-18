@@ -207,7 +207,7 @@ surfaces, then again with every `slot` feed at each standard surface: `452x444.k
 | File | What |
 |---|---|
 | `catalog.json` | The app's words, the manifest and its sha256, the grants, per feed the surfaces it supports (each failure listed with its reason, never hidden), the inks it uses and its screens per example by kind, per example its timing and peak memory, and every screen with its sha256. Schema: `sdk/slowapp_sdk/schema/catalog.schema.json`. |
-| `screens/<example>/<WxH>/<feed>-<card>.png` | Every card of every example at every size that works; for prompts, each question card (`kind` ask) and each answer's rest card (answer). 2-bit PNGs in the inks. |
+| `screens/<example>/<surface>/<feed>/<card>.png` | Every card of every example at every size that works (a size another example fails at is unsupported, and shows no screens); for prompts, each question card (`kind` ask) and each answer's rest card (answer). 2-bit PNGs in the inks. A card id's characters outside `A-Za-z0-9._-` become `_`, and a name that's already taken gets `~2`, `~3`, …. |
 | `screens/<example>/panel-home.png`, `panel-prompt.png` | The whole panel: the home cards in their slots under the strips slowd draws (armed key, next card, deck dots), and the first prompt on its slot. Drawn by `slowd compose` from the slowd-sim image; without it (`--slowd-image` unset or not pullable) the strips are blank and `strips` is false. |
 
 `release` (in `app.yml` after the push) adds the image's size per platform, read from the registry
