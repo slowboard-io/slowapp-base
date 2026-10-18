@@ -32,11 +32,12 @@ export function fromPort(port, { timeoutMs = 0 } = {}) {
   let seq = 0;
   const waiting = new Map();
   const handlers = new Map(); // event -> Set(fn)
+  const report = (e) => setTimeout(() => { throw e; }); // off this stack, as a page error
   port.onmessage = ({ data: m }) => {
     if (!m || typeof m !== "object") return;
     if (m.event) {
       for (const f of handlers.get(m.event) || []) {
-        try { f(m); } catch (e) { setTimeout(() => { throw e; }); }
+        try { f(m); } catch (e) { report(e); }
       }
       return;
     }
@@ -65,6 +66,7 @@ export function fromPort(port, { timeoutMs = 0 } = {}) {
   };
 
   const docWatchers = new Map(); // name -> Set(fn)
+  const docsWatched = new Set(); // names the hub was asked to watch (a refused ask is asked again)
   let runsWatched = false;
   on("doc", (m) => { for (const f of docWatchers.get(m.name) || []) f({ rev: m.rev, value: m.value, at: m.at }); });
 
@@ -81,7 +83,11 @@ export function fromPort(port, { timeoutMs = 0 } = {}) {
       put: (name, value, rev) => call("docs.put", name, value, rev),
       /** Changes from jobs and other tabs: f({rev, value}). Returns an unsubscribe. */
       watch(name, f) {
-        if (!docWatchers.has(name)) { docWatchers.set(name, new Set()); call("docs.watch", name); }
+        if (!docWatchers.has(name)) docWatchers.set(name, new Set());
+        if (!docsWatched.has(name)) {
+          docsWatched.add(name);
+          call("docs.watch", name).catch((e) => { docsWatched.delete(name); report(e); });
+        }
         docWatchers.get(name).add(f);
         return () => docWatchers.get(name).delete(f);
       },
@@ -104,7 +110,10 @@ export function fromPort(port, { timeoutMs = 0 } = {}) {
     events: {
       /** The app's runs as they start and end: f({job, run, phase: "started"|"ended", outcome}). */
       runs(f) {
-        if (!runsWatched) { runsWatched = true; call("events.watch"); }
+        if (!runsWatched) {
+          runsWatched = true;
+          call("events.watch").catch((e) => { runsWatched = false; report(e); });
+        }
         return on("run", f);
       },
     },

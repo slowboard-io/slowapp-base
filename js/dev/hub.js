@@ -69,8 +69,10 @@ export function checkArgs(job, args) {
 
 /**
  * @param manifest   the parsed slowapp.toml
- * @param state      {docs: {name: {rev, value, at}}, secrets: [names], settings: {}} (persisted by the caller)
- * @param runJob     async (name, {args, docs, settings, secrets}) => {exit, result, docs, log}
+ * @param state      {docs: {name: {rev, value, at}}, secrets: [names], settings: {}} (persisted by the caller,
+ *                   all but `secrets`: their values live only in memory, so set-ness goes with them)
+ * @param runJob     async (name, {args, docs, settings, secrets}) => {exit, result, docs, log, feeds}
+ *                   (`feeds: false` when it wrote no feed: exit 0 is then "unchanged", as on the hub)
  * @param emit       (event) => void: {event: "doc"|"run", ...}
  * @param save       () => void after any change to state
  */
@@ -131,7 +133,7 @@ export class MockHub {
         if (!decl) throw new HubError("not_found", "no such doc");
         if (decl.writer === "job") throw new HubError("forbidden", "only this app's jobs write this doc");
         const max = (decl.max_kb || 64) * 1024;
-        if (JSON.stringify(value ?? null).length > max) throw new HubError("too_big", `this doc holds at most ${max / 1024} KiB`);
+        if (Buffer.byteLength(JSON.stringify(value ?? null)) > max) throw new HubError("too_big", `this doc holds at most ${max / 1024} KiB`);
         const cur = this.doc(name);
         if (cur.rev !== rev) throw new HubError("conflict", "changed since you read it", { rev: cur.rev, value: cur.value });
         const r = this.writeDoc(name, value ?? null, "ui");
@@ -155,7 +157,7 @@ export class MockHub {
         const [name, value] = args;
         if (!this.secretStatus().some((s) => s.name === name)) throw new HubError("invalid", "not one of this app's secrets");
         const set = call === "secrets.set";
-        if (set && (typeof value !== "string" || !value.length || value.length > MAX_SECRET)) throw new HubError("invalid", `a secret is 1 to ${MAX_SECRET} bytes`);
+        if (set && (typeof value !== "string" || !value.length || Buffer.byteLength(value) > MAX_SECRET)) throw new HubError("invalid", `a secret is 1 to ${MAX_SECRET} bytes`);
         this.state.secrets = this.state.secrets.filter((n) => n !== name).concat(set ? [name] : []);
         this.secretValues = { ...(this.secretValues || {}), [name]: set ? value : undefined };
         this.save();
@@ -191,7 +193,7 @@ export class MockHub {
     }
     const exit = r.exit ?? 0;
     const ok = exit === 0 || exit === 3;
-    const outcome = exit === 0 || exit === 3 ? "unchanged" : exit === 5 ? "needs_config" : exit === 4 ? "transient" : "failed";
+    const outcome = exit === 3 || (exit === 0 && r.feeds === false) ? "unchanged" : exit === 0 ? "new" : exit === 5 ? "needs_config" : exit === 4 ? "transient" : "failed";
     let conflict = false;
     if (ok) {
       for (const [n, v] of Object.entries(r.docs || {})) {

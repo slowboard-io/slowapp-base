@@ -7,8 +7,8 @@
 //   singlefile), refused over the hub's 2 MB cap. The app's Dockerfile copies it to the
 //   manifest's [ui] entry (usually /ui/index.html).
 // - dev: the dev chrome at /__slowboard/ frames the app in the hub's sandbox and answers the
-//   bridge from a mock hub (hub.js) that keeps docs, settings and which secrets are set in
-//   .slowapp/dev.json. Jobs run for real when `job` names the app's command (it gets
+//   bridge from a mock hub (hub.js) that keeps docs and settings in .slowapp/dev.json (secrets
+//   only in memory, until the server stops). Jobs run for real when `job` names the app's command (it gets
 //   `job <name>`, SLOWAPP_IN/OUT/STATE/SECRETS on temp dirs, /in/args.json and /in/docs), or
 //   through slowapp.dev.js (`export const jobs = {name: async ({args, docs, settings}) =>
 //   ({result, docs})}`), or not at all.
@@ -70,6 +70,18 @@ function chromeHtml() {
 </body></html>`;
 }
 
+/**
+ * Whether a request comes from this server's own pages (the chrome). The mock hub's endpoints run
+ * jobs with dev secrets and hand out docs, so another site, or a sandboxed frame on one
+ * (`Origin: null`), must not reach them; curl and the like send neither header.
+ */
+export function sameOrigin(req) {
+  const site = req.headers["sec-fetch-site"];
+  if (site && site !== "same-origin" && site !== "none") return false; // none: typed in the address bar
+  const origin = req.headers.origin;
+  return !origin || origin === `http://${req.headers.host}` || origin === `https://${req.headers.host}`;
+}
+
 function readJson(f, fallback) {
   try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch { return fallback; }
 }
@@ -99,6 +111,7 @@ export function commandRunner({ cmd, image, engine = "docker", cwd, manifestPath
     let argv, opts;
     if (image) {
       fs.chmodSync(out, 0o777);
+      fs.chmodSync(stateDir, 0o777); // /data, as /out: the image's user isn't this one
       const net = manifest.app?.network === "egress" ? [] : ["--network", "none"];
       argv = [engine, "run", "--rm", "--read-only", "--tmpfs", "/tmp", ...net,
         "-v", `${inp}:/in:ro`, "-v", `${out}:/out`, "-v", `${path.resolve(stateDir)}:/data`, "-v", `${sec}:/run/secrets:ro`,
@@ -124,9 +137,10 @@ export function commandRunner({ cmd, image, engine = "docker", cwd, manifestPath
         if (f.endsWith(".json")) outDocs[f.slice(0, -5)] = readJson(path.join(out, "docs", f), null);
       }
       const result = readJson(path.join(out, "result.json"), null);
+      const feeds = fs.existsSync(path.join(out, "feeds")) && fs.readdirSync(path.join(out, "feeds")).length > 0;
       fs.rmSync(tmp, { recursive: true, force: true });
       if (log.trim()) process.stderr.write(`[slowapp dev] ${name}: ${log.trim()}\n`);
-      resolve({ exit: code ?? 1, result, docs: outDocs, log });
+      resolve({ exit: code ?? 1, result, docs: outDocs, log, feeds });
     });
   });
 }
@@ -152,7 +166,6 @@ export function slowboard(opts = {}) {
           modulePreload: false,
           ...(config.build || {}),
         },
-        server: { cors: { origin: "*" } },
       };
     },
     configResolved(c) { root = c.root; },
@@ -179,20 +192,22 @@ export function slowboard(opts = {}) {
         };
       }
       const hub = new MockHub({
-        manifest, state: readJson(stateFile, {}), runJob, emit,
+        manifest, state: { ...readJson(stateFile, {}), secrets: [] }, runJob, emit,
         save: () => {
           fs.mkdirSync(devDir, { recursive: true });
-          const { docs, secrets, settings } = hub.state;
-          fs.writeFileSync(stateFile, JSON.stringify({ docs, secrets, settings }, null, 2));
+          const { docs, settings } = hub.state;
+          fs.writeFileSync(stateFile, JSON.stringify({ docs, settings }, null, 2));
         },
       });
 
       server.middlewares.use((req, res, next) => {
         const url = (req.url || "").split("?")[0];
-        // The sandboxed frame is an opaque origin: its module and asset requests say
-        // `Origin: null` and need CORS, as the hub's single file never does.
-        if (req.headers.origin === "null") res.setHeader("Access-Control-Allow-Origin", "*");
-        if (!url.startsWith("/__slowboard/")) return next();
+        if (!url.startsWith("/__slowboard/")) {
+          // The sandboxed frame is an opaque origin: its module and asset requests say
+          // `Origin: null` and need CORS, as the hub's single file never does.
+          if (req.headers.origin === "null") res.setHeader("Access-Control-Allow-Origin", "*");
+          return next();
+        }
         if (url === "/__slowboard/" && req.method === "GET") {
           res.setHeader("content-type", "text/html; charset=utf-8");
           return res.end(chromeHtml());
@@ -201,6 +216,7 @@ export function slowboard(opts = {}) {
           res.setHeader("content-type", "text/javascript; charset=utf-8");
           return res.end(fs.readFileSync(path.join(HERE, "chrome.js")));
         }
+        if (!sameOrigin(req)) { res.statusCode = 403; return res.end(); }
         if (url === "/__slowboard/events") {
           res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
           res.write(": hello\n\n");
@@ -241,14 +257,18 @@ export function slowboard(opts = {}) {
       };
     },
 
-    generateBundle(_o, bundle) {
-      const max = opts.maxBytes ?? MAX_BUNDLE;
-      for (const f of Object.values(bundle)) {
-        const size = f.type === "asset" ? Buffer.byteLength(f.source) : Buffer.byteLength(f.code || "");
-        if (f.fileName.endsWith(".html") && size > max) {
-          this.error(`${f.fileName} is ${size} bytes; the hub serves at most ${max} (2 MB)`);
+    // After vite-plugin-singlefile's (enforce: "post") has inlined everything into the HTML.
+    generateBundle: {
+      order: "post",
+      handler(_o, bundle) {
+        const max = opts.maxBytes ?? MAX_BUNDLE;
+        for (const f of Object.values(bundle)) {
+          const size = f.type === "asset" ? Buffer.byteLength(f.source) : Buffer.byteLength(f.code || "");
+          if (f.fileName.endsWith(".html") && size > max) {
+            this.error(`${f.fileName} is ${size} bytes; the hub serves at most ${max} (2 MB)`);
+          }
         }
-      }
+      },
     },
   };
   return [viteSingleFile({ removeViteModuleLoader: true }), plugin];

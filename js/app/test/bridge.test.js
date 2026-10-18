@@ -137,6 +137,39 @@ test("on_change runs once after a burst of writes", async () => {
   close();
 });
 
+test("max_kb counts UTF-8 bytes, and outcomes are the hub's: 0 new (unchanged with no feed), 3 unchanged", async () => {
+  const exits = [{ exit: 0 }, { exit: 0, feeds: false }, { exit: 3 }, { exit: 4 }, { exit: 5 }, { exit: 1 }];
+  const hub = new MockHub({ manifest: MANIFEST, runJob: async () => exits.shift() });
+  await assert.rejects(hub.handle("docs.put", ["notes", "é".repeat(600), 0]), { code: "too_big" }); // 602 chars, 1202 bytes
+  const outcomes = [];
+  for (let i = 0; i < 6; i++) outcomes.push((await hub.handle("jobs.run", ["echo", {}])).outcome);
+  assert.deepEqual(outcomes, ["new", "unchanged", "unchanged", "transient", "needs_config", "failed"]);
+});
+
+test("a refused watch is reported, and asked again by the next watcher", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] }); // the report's throw stays queued
+  const asked = [];
+  const ch = new MessageChannel();
+  ch.port1.onmessage = ({ data: m }) => {
+    asked.push(m.call);
+    ch.port1.postMessage({ id: m.id, ok: false, error: { code: "not_found", message: "no such doc" } });
+  };
+  const app = fromPort(ch.port2);
+  return new Promise((done) => {
+    app.docs.watch("nope", () => {});
+    app.events.runs(() => {});
+    setImmediate(() => setImmediate(() => {
+      app.docs.watch("nope", () => {});
+      app.events.runs(() => {});
+      setImmediate(() => {
+        assert.deepEqual(asked, ["docs.watch", "events.watch", "docs.watch", "events.watch"]);
+        ch.port1.close();
+        done();
+      });
+    }));
+  });
+});
+
 test("connect waits for the chrome's port, checks the protocol, and times out without a hub", async () => {
   const listeners = new Set();
   const parent = {};
