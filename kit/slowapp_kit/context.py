@@ -18,7 +18,7 @@ from PIL import Image
 from .errors import ContractError
 from .inks import INK_SETS, WHITE
 
-CONTRACTS = ("3", "4")
+CONTRACTS = ("3", "4", "5")
 DOC_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 SURFACE_RE = re.compile(r"^(\d{1,4})x(\d{1,4})\.([a-z0-9]+)$")
 
@@ -57,6 +57,25 @@ class Surface:
         return cls(feed=feed, w=int(m[1]), h=int(m[2]), inks=m[3], **kw)
 
 
+@dataclass(frozen=True)
+class Device:
+    """Contract 5: SLOWAPP_DEVICE, the glass this run draws for. A run serves one device and its
+    SLOWAPP_FEEDS lists only what that device needs, so draw only those."""
+    id: str
+    profile: str
+    w: int
+    h: int
+    inks: str
+
+    @classmethod
+    def parse(cls, raw):
+        try:
+            d = json.loads(raw)
+            return cls(id=d["id"], profile=d["profile"], w=int(d["w"]), h=int(d["h"]), inks=d["inks"])
+        except (ValueError, KeyError, TypeError) as e:
+            raise ContractError(f"bad SLOWAPP_DEVICE {raw!r}: {e}")
+
+
 def _time(v, tz):
     t = datetime.fromisoformat(v)
     return t if t.tzinfo else t.replace(tzinfo=tz)
@@ -89,6 +108,8 @@ class Context:
     cache: Path
     secrets_dir: Path
     manifest: dict = field(default_factory=dict)
+    # Contract 5; None in fixture mode and from older hubs.
+    device: Device | None = None
     _fetched: dict = field(default_factory=dict)
 
     @property
@@ -99,7 +120,7 @@ class Context:
     def from_env(cls, job=None, env=None, out=None):
         env = os.environ if env is None else env
         if env.get("SLOWAPP_CONTRACT", "4") not in CONTRACTS:
-            raise ContractError(f"SLOWAPP_CONTRACT={env['SLOWAPP_CONTRACT']}: this kit speaks contracts 3 and 4")
+            raise ContractError(f"SLOWAPP_CONTRACT={env['SLOWAPP_CONTRACT']}: this kit speaks contracts 3 to 5")
         tz = ZoneInfo(env.get("TZ") or "America/Vancouver")
         mode = env.get("SLOWAPP_MODE", "live")
         if mode not in ("live", "fixture"):
@@ -129,6 +150,7 @@ class Context:
             cache=Path(env.get("SLOWAPP_CACHE", "/cache")),
             secrets_dir=Path(env.get("SLOWAPP_SECRETS", "/run/secrets")),
             manifest=manifest,
+            device=Device.parse(env["SLOWAPP_DEVICE"]) if env.get("SLOWAPP_DEVICE") else None,
         )
 
     # ------------------------------------------------------------ inputs

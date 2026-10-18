@@ -14,7 +14,7 @@
       "properties": {
         "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,23}$"},
         "title": {"type": "string", "minLength": 1, "maxLength": 40},
-        "contract": {"enum": [3, 4]},
+        "contract": {"enum": [3, 4, 5]},
         "image": {"type": "string", "pattern": "^[a-z0-9.-]+(:[0-9]+)?(/[a-z0-9._-]+)+$"},
         "memory": {"$ref": "#/$defs/size"},
         "tmp": {"$ref": "#/$defs/size"},
@@ -98,7 +98,8 @@
         "type": "object", "required": ["name", "size"], "additionalProperties": false,
         "properties": {
           "name": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,31}$"},
-          "size": {"type": "string", "pattern": "^(slot|[0-9]{1,4}x[0-9]{1,4})$"}
+          "size": {"type": "string", "pattern": "^(slot|[0-9]{1,4}x[0-9]{1,4})$"},
+          "inks": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["k4", "g16"]}}
         }
       }
     },
@@ -116,7 +117,7 @@
           "settings": {"type": "object"},
           "feeds": {
             "type": "object", "minProperties": 1,
-            "additionalProperties": {"type": "string", "pattern": "^[0-9]{1,4}x[0-9]{1,4}\\.k4$"}
+            "additionalProperties": {"type": "string", "pattern": "^[0-9]{1,4}x[0-9]{1,4}\\.(k4|g16)$"}
           }
         }
       }

@@ -1,4 +1,4 @@
-"""Validate an app manifest (slowapp.toml) against contracts 3 and 4.
+"""Validate an app manifest (slowapp.toml) against contracts 3 to 5.
 
   slowapp validate            ./slowapp.toml
   slowapp validate DIR ...    each DIR/slowapp.toml (or a path to the file)
@@ -109,6 +109,15 @@ def rule_errors(m, app_dir=None):
         errs.append("a feed named 'prompts' needs prompts = true (the prompts grant)")
     if m.get("events", {}).get("accept") and "event" not in jobs:
         errs.append("[events] accept needs a job named 'event'")
+    # Contract 5: a feed's ink sets. Slot feeds land on the board, in k4.
+    for f in m.get("feed", []):
+        inks = f.get("inks", ["k4"])
+        if inks != ["k4"] and p.get("contract", 3) < 5:
+            errs.append(f"feed {f['name']}: inks other than k4 need contract = 5")
+        if f["size"] == "slot" and "k4" not in inks:
+            errs.append(f"feed {f['name']}: a slot feed is drawn in the board's k4")
+        if f["name"] == "prompts" and (f["size"] != "slot" or inks != ["k4"]):
+            errs.append("the prompts feed is a k4 slot feed")
     # Contract 4: app UIs (a bundle and/or a backend), docs and job args.
     ui = m.get("ui")
     c4 = p.get("contract", 3) >= 4
@@ -180,6 +189,9 @@ def rule_errors(m, app_dir=None):
             size = feeds[f]["size"]
             if size != "slot" and not surface.startswith(size + "."):
                 errs.append(f"{where}: feed {f} is fixed at {size}, example asks {surface}")
+            ink = surface.rsplit(".", 1)[-1]
+            if ink not in feeds[f].get("inks", ["k4"]):
+                errs.append(f"{where}: feed {f} isn't drawn in {ink} (its inks: {', '.join(feeds[f].get('inks', ['k4']))})")
             if size == "slot" and surface not in SLOT_SURFACES:
                 warns.append(f"{where}: {surface} is not a default slot surface ({', '.join(sorted(SLOT_SURFACES))})")
     if feeds and not m.get("example"):

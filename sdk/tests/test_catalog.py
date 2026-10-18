@@ -271,6 +271,24 @@ class Build(unittest.TestCase):
         fr, specs = self.compose_specs({"map": self.feed(1360), "prompts": pr}, prompts)
         self.assertEqual([f["kind"] for f in fr], ["home"])
 
+    def test_g16_feeds_are_not_the_boards(self):
+        # Contract 5: a 1360-wide sleep strip isn't a whole-panel board card, and an example with
+        # only feeds for other glass has no full-panel picture.
+        sleep = dict(self.feed(1360), inks="g16")
+        self.assertEqual(catalog.place({"sleep": sleep}), {})
+        self.assertEqual(catalog.place({"sleep": sleep, "map": self.feed(452)}), {"map": "left"})
+        fr, specs = self.compose_specs({"sleep": sleep}, None)
+        self.assertEqual((fr, specs), ([], []))
+
+    def test_g16_screens_are_grey_pngs(self):
+        img = Image.new("RGB", (8, 2), (255, 255, 255))
+        img.putpixel((0, 0), (136, 136, 136))
+        with tempfile.TemporaryDirectory() as d:
+            catalog.save_png(img, Path(d) / "s.png", "g16")
+            data = (Path(d) / "s.png").read_bytes()
+        self.assertEqual((data[24], data[25]), (8, 0))
+        self.assertEqual(catalog.inks(img), ["white", "grey"])
+
 
 class Check(unittest.TestCase):
     @classmethod
