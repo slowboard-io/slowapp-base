@@ -52,7 +52,8 @@ export function useApp() {
  * else (a job, another tab) wrote first, the hub refuses it: the hook takes their version,
  * sets `conflict`, and `save` rejects with code "conflict" so the caller can retry on top.
  * Changes from elsewhere arrive on their own. Saves go one at a time, each over the last one's
- * revision, so a quick second save (or `prev => next`) builds on the first.
+ * revision, so a quick second save (or `prev => next`) builds on the first. A conflict rejects the
+ * saves queued behind it too (they never saw the other writer's value); later saves build on it.
  */
 export function useDoc(name, initial = null) {
   const app = useApp();
@@ -61,6 +62,7 @@ export function useDoc(name, initial = null) {
   const cur = useRef(doc); // the latest doc, ahead of the next render
   const queue = useRef(Promise.resolve());
   const pending = useRef(0);
+  const conflicts = useRef({ n: 0, error: null }); // a save queued before the nth conflict fails with it
   const show = (d) => { cur.current = d; setDoc(d); };
   useEffect(() => {
     let live = true;
@@ -77,7 +79,13 @@ export function useDoc(name, initial = null) {
   const save = useCallback((next) => {
     pending.current += 1;
     setStatus({ saving: true, error: null, conflict: false });
+    const seen = conflicts.current.n;
     const one = queue.current.then(async () => {
+      if (conflicts.current.n !== seen) {
+        const { error } = conflicts.current;
+        setStatus({ saving: --pending.current > 0, error, conflict: true });
+        throw error;
+      }
       const base = cur.current;
       const value = typeof next === "function" ? next(base.value) : next;
       show({ ...base, value }); // optimistic
@@ -87,8 +95,10 @@ export function useDoc(name, initial = null) {
         if (--pending.current === 0) setStatus({ saving: false, error: null, conflict: false });
         return rev;
       } catch (error) {
-        if (error.code === "conflict") show({ rev: error.rev, value: error.value ?? initial, loading: false });
-        else show(base);
+        if (error.code === "conflict") {
+          conflicts.current = { n: conflicts.current.n + 1, error };
+          show({ rev: error.rev, value: error.value ?? initial, loading: false });
+        } else show(base);
         setStatus({ saving: --pending.current > 0, error, conflict: error.code === "conflict" });
         throw error;
       }
