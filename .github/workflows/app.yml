@@ -144,7 +144,7 @@ jobs:
         if: always()
         run: '[ -f out/previews/report.md ] && cat out/previews/report.md >> "$GITHUB_STEP_SUMMARY" || true'
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: previews
@@ -170,7 +170,7 @@ jobs:
           python -m slowapp_sdk catalog build --image app:ci --out out/catalog "${args[@]}"
           cat out/catalog/report.md >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: catalog
           path: out/catalog/
@@ -223,7 +223,7 @@ jobs:
         run: |
           pip install pillow
           python -m slowapp_sdk fixture --image app:armv7 --out out/armv7
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: startsWith(github.ref, 'refs/tags/v')
         with:
           name: armv7-timings
