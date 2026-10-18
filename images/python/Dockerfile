@@ -23,10 +23,14 @@ ENV PYTHONPATH=/opt/slowapp \
 COPY fonts /opt/slowapp/fonts
 COPY kit/slowapp_kit /opt/slowapp/slowapp_kit
 COPY sdk/slowapp_sdk /opt/slowapp/slowapp_sdk
+# slowapp-remote: a cloud hub run (one job on a throwaway machine, /in, /out and /data through
+# presigned links). Kit apps also take `slowapp-remote job <name>` as their own command.
+COPY --chmod=755 kit/bin/slowapp-remote /usr/local/bin/slowapp-remote
 
 # Bytecode is compiled now, at build: the root filesystem is read-only at run time.
 RUN python3 -m compileall -q /opt/slowapp \
- && python3 -c "import slowapp_kit, slowapp_sdk, PIL"
+ && python3 -c "import slowapp_kit, slowapp_kit.remote, slowapp_sdk, PIL" \
+ && command -v slowapp-remote
 
 ARG VERSION=dev
 RUN echo "$VERSION" > /opt/slowapp/slowapp_sdk/VERSION

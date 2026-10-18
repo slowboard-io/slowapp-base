@@ -192,6 +192,58 @@ The full tables are docs/SLOWBOARD.md §8.2–§8.4; `slowapp_kit` reads all of 
 - **Exit codes:** 0 ingest · 3 unchanged · 4 transient · 5 needs config · 64 contract error ·
   137 killed. Anything else is a failure with backoff.
 
+## Remote runs (the cloud hub)
+
+The cloud hub runs each job on a throwaway Fly Machine made from the app's image, with no mounts:
+`/in`, `/out` and `/data` travel as objects in Tigris behind presigned links. The base images
+(1.4.0 and later) carry the wrapper that does this, `slowapp-remote`; app code doesn't change.
+
+- **Command:** `slowapp-remote job <name>`, in place of `job <name>` (so `init.cmd` on the
+  Machines API, keeping the image's `ENTRYPOINT`). A kit app takes that argv itself and runs
+  `job <name>` as a child of its own entrypoint. An image with no `ENTRYPOINT` runs
+  `/usr/local/bin/slowapp-remote`, which needs the app's command as `SLOWAPP_ENTRYPOINT` (a JSON
+  list, e.g. `["python3", "-m", "moon"]`); without either it exits 64.
+- **Environment:** everything a Podman run gets (`SLOWAPP_CONTRACT`, `SLOWAPP_APP`, `SLOWAPP_JOB`,
+  `SLOWAPP_RUN_ID`, `SLOWAPP_REASON`, `SLOWAPP_NOW`/`FOR`/`DEADLINE`, `SLOWAPP_MODE`,
+  `SLOWAPP_FEEDS`, `SLOWAPP_DEVICE`, `TZ`), plus:
+
+  | Variable | | What |
+  |---|---|---|
+  | `SLOWAPP_REMOTE_IN` | required | Presigned GET of `in.tar`: what would be `/in`, relative names (`settings.json`, `docs/<name>.json`, …). |
+  | `SLOWAPP_REMOTE_OUT` | required | Presigned PUT of `out.tar`: `/out` after the job. |
+  | `SLOWAPP_REMOTE_LOG` | optional | Presigned PUT of the log: the run's stdout and stderr together, its last 64 KiB. |
+  | `SLOWAPP_REMOTE_DATA_GET` | if `data` | Presigned GET of the board's saved `/data` as `data.tar.gz`. A 404 means none yet: start empty. |
+  | `SLOWAPP_REMOTE_DATA_PUT` | if `data` | Presigned PUT of the new `data.tar.gz`. Both data links are left out when the app declares no `data`. |
+  | `SLOWAPP_REMOTE_DATA_MAX_MB` | optional | The manifest's `data.max_mb` (read from `/app/slowapp.toml` if unset). `/data` over it isn't uploaded: the old one stays. |
+  | `SLOWAPP_REMOTE_TIMEOUT_S` | optional | Kill the job child after this many seconds (exit 137) so the uploads still happen; set it a little under the machine's own stop. |
+
+  The job child gets none of the `SLOWAPP_REMOTE_*` variables. Its `SLOWAPP_IN`, `SLOWAPP_OUT`,
+  `SLOWAPP_STATE` and `SLOWAPP_CACHE` point at fresh local directories (`/cache` starts empty and
+  isn't kept). `SLOWAPP_DEADLINE` means what it does on a board, the time the job's fetches fit
+  into, not a kill time.
+- **Requests:** GETs follow redirects; PUTs send `Content-Length` (never chunked) and
+  `Content-Type` `application/x-tar` (out), `application/gzip` (data) or `text/plain;
+  charset=utf-8` (log), so sign only `host` or sign those. Each request has a 60 s timeout and is
+  tried 3 times (2 s, then 4 s apart) on a network error, 408, 429 or 5xx; other 4xx aren't retried.
+- **Archives:** an input archive is refused whole (nothing extracted) if any member has an
+  absolute name or a `..`, is a device or fifo, or is a link that leaves the directory; then
+  tarfile's `data` filter extracts it. `out.tar` and `data.tar.gz` hold directories and regular
+  files under relative names; a symlink or special file the job made is left out and said in the
+  log.
+- **Order:** fetch `in.tar` and the data, run the job, then always try to upload: `/data` (every
+  run the job ran, whatever its exit, as a board keeps `/data`; never when the inputs failed, so a
+  failed fetch can't wipe the saved data), then `out.tar` with the kit's `.metrics.json` and
+  `.remote.json`, then the log, last, so it says how the uploads went.
+- **`.remote.json`** (in `out.tar`): `{"job", "run_id", "job_exit", "exit_code", "duration_ms",
+  "started_at", "ended_at", "error", "data", "uploads_failed"}`. `job_exit` is the job's own code
+  (`null` if it never ran), `exit_code` what the machine exits with, times are UTC RFC 3339,
+  `data` is `{"status": "none" | "saved" | "over_cap" | "failed", "loaded", "bytes", "max_mb"}`
+  and `uploads_failed` lists `"data"` (and in the log, `"out"`).
+- **Exit codes:** the job's own (0, 3, 4, 5, 64, 137, …), except **4** when an input fetch failed
+  or an input archive was refused (the job didn't run), **4** when the job ran but `/data` or
+  `out.tar` didn't upload (the log and `.remote.json` say which), and **64** for a bad command or
+  missing links. A failed log upload changes nothing: it shows in the machine's own log.
+
 ## Fixture mode
 
 `SLOWAPP_MODE=fixture`, `--network none`, no secrets (`ctx.secret()` returns `fixture-<name>`), the

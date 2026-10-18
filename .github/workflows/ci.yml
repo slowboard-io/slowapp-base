@@ -39,9 +39,21 @@ jobs:
           npm test
           npm run build:example
 
+      # A real S3 API for slowapp-remote's presigned-link test (kit/tests/test_remote.py, S3Links):
+      # versitygw checks SigV4 signatures as S3 and Tigris do. A step, not a service: it needs args.
+      - name: S3 for the remote-run test (versitygw)
+        run: |
+          docker run -d --name s3 -p 7070:7070 -e ROOT_ACCESS_KEY=slowapp -e ROOT_SECRET_KEY=slowapp-test-secret \
+            docker.io/versity/versitygw:v1.0.16 posix /tmp
+          for i in $(seq 30); do curl -s -o /dev/null http://127.0.0.1:7070/ && exit 0; sleep 1; done
+          docker logs s3; exit 1
+
       - name: Unit tests (runner)
         env:
           PYTHONPATH: kit:sdk:example
+          SLOWAPP_TEST_S3: http://127.0.0.1:7070
+          SLOWAPP_TEST_S3_KEY: slowapp
+          SLOWAPP_TEST_S3_SECRET: slowapp-test-secret
         run: |
           python -m unittest discover -v -s kit/tests
           python -m unittest discover -v -s sdk/tests
@@ -62,6 +74,12 @@ jobs:
         run: |
           docker run --rm -v "$PWD:/src:ro" -w /src -e PYTHONPATH=/opt/slowapp:/src/example slowapp-python:dev \
             sh -c 'python3 -m unittest discover -s kit/tests && python3 -m unittest discover -s sdk/tests && python3 -m unittest discover -s example/tests'
+          # slowapp-remote is on PATH, and a kit app takes it as its command (with no links: exit 64)
+          set +e
+          docker run --rm slowapp-python:dev slowapp-remote job render; a=$?
+          docker run --rm slowapp-example:dev slowapp-remote job render; b=$?
+          set -e
+          [ "$a" = 64 ] && [ "$b" = 64 ] || { echo "slowapp-remote: want 64 and 64, got $a and $b"; exit 1; }
           docker run --rm slowapp-python-sci:dev python3 -c '
           import os, numpy, slowapp_kit
           for v in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS"):
