@@ -51,41 +51,50 @@ export function useApp() {
  * `save(next)` takes a value or `prev => next` and writes over the revision last seen. If someone
  * else (a job, another tab) wrote first, the hub refuses it: the hook takes their version,
  * sets `conflict`, and `save` rejects with code "conflict" so the caller can retry on top.
- * Changes from elsewhere arrive on their own.
+ * Changes from elsewhere arrive on their own. Saves go one at a time, each over the last one's
+ * revision, so a quick second save (or `prev => next`) builds on the first.
  */
 export function useDoc(name, initial = null) {
   const app = useApp();
   const [doc, setDoc] = useState({ rev: 0, value: initial, loading: true });
   const [status, setStatus] = useState({ saving: false, error: null, conflict: false });
-  const cur = useRef(doc);
-  cur.current = doc;
+  const cur = useRef(doc); // the latest doc, ahead of the next render
+  const queue = useRef(Promise.resolve());
+  const pending = useRef(0);
+  const show = (d) => { cur.current = d; setDoc(d); };
   useEffect(() => {
     let live = true;
     app.docs.get(name).then(
-      (d) => live && setDoc({ rev: d.rev, value: d.value ?? initial, loading: false }),
-      (error) => live && (setDoc((p) => ({ ...p, loading: false })), setStatus((s) => ({ ...s, error }))),
+      // A watched change may have landed first: keep whichever revision is newer.
+      (d) => live && show(d.rev >= cur.current.rev ? { rev: d.rev, value: d.value ?? initial, loading: false } : { ...cur.current, loading: false }),
+      (error) => live && (show({ ...cur.current, loading: false }), setStatus((s) => ({ ...s, error }))),
     );
     const off = app.docs.watch(name, (d) => {
-      if (d.rev > cur.current.rev) setDoc({ rev: d.rev, value: d.value ?? initial, loading: false });
+      if (d.rev > cur.current.rev) show({ rev: d.rev, value: d.value ?? initial, loading: false });
     });
     return () => { live = false; off(); };
   }, [app, name]); // eslint-disable-line react-hooks/exhaustive-deps
-  const save = useCallback(async (next) => {
-    const base = cur.current;
-    const value = typeof next === "function" ? next(base.value) : next;
+  const save = useCallback((next) => {
+    pending.current += 1;
     setStatus({ saving: true, error: null, conflict: false });
-    setDoc({ ...base, value }); // optimistic
-    try {
-      const { rev } = await app.docs.put(name, value, base.rev);
-      setDoc({ rev, value, loading: false });
-      setStatus({ saving: false, error: null, conflict: false });
-      return rev;
-    } catch (error) {
-      if (error.code === "conflict") setDoc({ rev: error.rev, value: error.value ?? initial, loading: false });
-      else setDoc(base);
-      setStatus({ saving: false, error, conflict: error.code === "conflict" });
-      throw error;
-    }
+    const one = queue.current.then(async () => {
+      const base = cur.current;
+      const value = typeof next === "function" ? next(base.value) : next;
+      show({ ...base, value }); // optimistic
+      try {
+        const { rev } = await app.docs.put(name, value, base.rev);
+        show({ rev, value, loading: false });
+        if (--pending.current === 0) setStatus({ saving: false, error: null, conflict: false });
+        return rev;
+      } catch (error) {
+        if (error.code === "conflict") show({ rev: error.rev, value: error.value ?? initial, loading: false });
+        else show(base);
+        setStatus({ saving: --pending.current > 0, error, conflict: error.code === "conflict" });
+        throw error;
+      }
+    });
+    queue.current = one.catch(() => {});
+    return one;
   }, [app, name]); // eslint-disable-line react-hooks/exhaustive-deps
   return [doc.value, save, { rev: doc.rev, loading: doc.loading, ...status }];
 }

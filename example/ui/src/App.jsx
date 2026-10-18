@@ -24,7 +24,8 @@ function Note() {
   const app = useApp();
   const [note, save, { saving, error, conflict }] = useDoc("note", "");
   const [draft, setDraft] = useState(note);
-  useEffect(() => setDraft(note || ""), [note]);
+  // On a conflict `note` becomes the other writer's: keep the draft, so saving again replaces it.
+  useEffect(() => { if (!conflict) setDraft(note || ""); }, [note]); // eslint-disable-line react-hooks/exhaustive-deps
   const submit = async (e) => {
     e.preventDefault();
     try {
