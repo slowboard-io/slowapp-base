@@ -4,3 +4,4 @@ out/
 node_modules/
 dist/
 .slowapp/
+sdk/slowapp_sdk/VERSION

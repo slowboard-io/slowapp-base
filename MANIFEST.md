@@ -53,6 +53,11 @@ tests/             unit tests, run inside the base image
 | `exports` | names | P4 transitional only (R3): files under `/export` other apps may import. |
 | `imports` | `app:export` | P4 transitional only: mounted read-only at `/imports/<app>/`. |
 | `prompts` | bool | The prompts grant: may write `/out/prompts.json`. Needs a feed named `prompts`. |
+| `blurb` | string | Catalog: one line for the shelf, 1–100 characters. |
+| `about` | string | Catalog: a short paragraph for the app's page, 1–800 characters. |
+| `ink` | `black` \| `white` \| `yellow` \| `red` | Catalog: the ink of the app's disk. |
+| `license` | string | Catalog: an SPDX expression (`MIT`, `Apache-2.0 OR MIT`). |
+| `repo` | string | Catalog: the source repository, an `https://` URL. |
 
 ## `[settings]`
 
@@ -183,3 +188,39 @@ Run one locally (Docker or Podman; set `SLOWAPP_PLATFORM=linux/arm/v7` to emulat
 docker build -t slowapp-moon:dev .
 python3 -m slowapp_sdk fixture --image slowapp-moon:dev --repeat     # PYTHONPATH: the SDK, see README
 ```
+
+## Catalog bundle
+
+An app's catalog page (on slowboard.io and in a hub's Apps pages) is computed from the image and
+from renders of the app's own examples; only the words come from `[app]`. `app.yml` builds the
+bundle on every run (artifact `catalog`) and finishes it on a release:
+
+```sh
+python3 -m slowapp_sdk catalog build --image slowapp-moon:dev --slowd-image ghcr.io/mike-anderson/slowd-sim:0.1.0
+python3 -m slowapp_sdk catalog check out/catalog
+```
+
+`build` runs every `[[example]]` twice (the renders must match pixel for pixel) at its own
+surfaces, then again with every `slot` feed at each standard surface: `452x444.k4`, `456x444.k4`
+(the Lyra's thirds) and `1360x444.k4` (the whole panel as one slot). It writes `out/catalog/`:
+
+| File | What |
+|---|---|
+| `catalog.json` | The app's words, the manifest and its sha256, the grants, per feed the surfaces it supports (each failure listed with its reason, never hidden), the inks it uses and its screens per example by kind, per example its timing and peak memory, and every screen with its sha256. Schema: `sdk/slowapp_sdk/schema/catalog.schema.json`. |
+| `screens/<example>/<surface>/<feed>/<card>.png` | Every card of every example at every size that works (a size another example fails at is unsupported, and shows no screens); for prompts, each question card (`kind` ask) and each answer's rest card (answer). 2-bit PNGs in the inks. A card id's characters outside `A-Za-z0-9._-` become `_`, and a name that's already taken gets `~2`, `~3`, …. |
+| `screens/<example>/panel-home.png`, `panel-prompt.png` | The whole panel: the home cards in their slots under the strips slowd draws (armed key, next card, deck dots), and the first prompt on its slot. Drawn by `slowd compose` from the slowd-sim image; without it (`--slowd-image` unset or not pullable) the strips are blank and `strips` is false. |
+
+`release` (in `app.yml` after the push) adds the image's size per platform, read from the registry
+(download, unpacked, and what it adds on a hub that already has the base the Dockerfile pins), the
+version and its `## X.Y.Z` section of `CHANGELOG.md` if there is one, and the examples timed on
+armv7 under QEMU. The release gets `catalog-<id>-<version>.json` and `.tar.gz`, and the same
+files are attached to the image as an OCI artifact (`application/vnd.slowboard.catalog.v1`) that
+refers to its digest:
+
+```sh
+oras discover --artifact-type application/vnd.slowboard.catalog.v1 ghcr.io/<owner>/<app>@sha256:…
+```
+
+`check` is the registry's first step on a submission: the schema, every file against its sha256,
+screens only at supported sizes, and every supported size shown for every example (exhaustive).
+

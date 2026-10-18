@@ -36,7 +36,7 @@ class RunArgs(unittest.TestCase):
         s = " ".join(args)
         for want in ("--read-only", "--network none", "--memory 48m", "--memory-swap 48m", "--pids-limit 64",
                      "--cap-drop all", "no-new-privileges", "/d:/data:ro", "/o:/out", "/i:/in:ro",
-                     "SLOWAPP_MODE=fixture", "SLOWAPP_CONTRACT=3", "img job render",
+                     "SLOWAPP_MODE=fixture", "SLOWAPP_CONTRACT=4", "img job render",
                      "--oom-score-adj 500", "/r:/run/sb", "sb.hub=ci"):
             self.assertIn(want, s)
         self.assertNotIn("/run/secrets", s)

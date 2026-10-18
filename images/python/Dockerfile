@@ -29,6 +29,7 @@ RUN python3 -m compileall -q /opt/slowapp \
  && python3 -c "import slowapp_kit, slowapp_sdk, PIL"
 
 ARG VERSION=dev
+RUN echo "$VERSION" > /opt/slowapp/slowapp_sdk/VERSION
 LABEL org.opencontainers.image.title="slowapp-python" \
       org.opencontainers.image.description="Slowapp base: Debian trixie, Python 3, Pillow, slowapp_kit (contracts 3 and 4)" \
       org.opencontainers.image.source="https://github.com/mike-anderson/slowapp-base" \

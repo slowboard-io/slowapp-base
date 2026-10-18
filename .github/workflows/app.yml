@@ -2,9 +2,12 @@
 # the app's Dockerfile pins, so an app is always checked by the tools of the base it builds on:
 #
 #   validate slowapp.toml → unit tests inside the base → build (amd64) → every [[example]] in
-#   fixture mode, twice → previews as an artifact and in the job summary → an armv7 build for the
-#   board → on a vX.Y.Z tag, push X.Y.Z / X.Y / X for armv7, arm64 and amd64 and put the digest the
-#   hub should pin in the release notes.
+#   fixture mode, twice → previews as an artifact and in the job summary → the catalog bundle
+#   (every example at every size, full-panel pictures with slowd's strips; MANIFEST.md "Catalog
+#   bundle") as an artifact → an armv7 build for the board → on a vX.Y.Z tag, push X.Y.Z / X.Y / X
+#   for armv7, arm64 and amd64, put the digest the hub should pin in the release notes, time the
+#   examples on armv7, and attach the finished bundle to the release and to the image (an OCI
+#   artifact that refers to its digest).
 #
 # Caller:
 #   jobs:
@@ -30,10 +33,43 @@ on:
       fixture-timeout-scale:
         type: string
         default: "1"
+      armv7-timeout-scale:
+        description: "Timeout scale for the armv7 timing runs (QEMU is slow)"
+        type: string
+        default: "10"
+      slowd-image:
+        description: "The slowd-sim image that draws full-panel pictures (empty: blank strips)"
+        type: string
+        default: ghcr.io/mike-anderson/slowd-sim:0.1.0
     outputs:
       digest:
         description: "The pushed image's digest (tag builds only)"
         value: ${{ jobs.publish.outputs.digest }}
+
+env:
+  # The image the Dockerfile's final stage builds on (`awk "$BASE_OF" Dockerfile`): the last FROM,
+  # past its --flags, with the ARG defaults declared before the first FROM filled in and an earlier
+  # stage's name followed to its image. catalog.base_of() in the SDK does the same.
+  BASE_OF: |
+    toupper($1) == "ARG" && !seen && index($2, "=") {
+      k = substr($2, 1, index($2, "=") - 1); v = substr($2, index($2, "=") + 1)
+      gsub(/^["']|["']$/, "", v); arg[k] = v; next
+    }
+    toupper($1) == "FROM" {
+      seen = 1; n = 0
+      for (i = 2; i <= NF; i++) if ($i !~ /^--/) w[++n] = $i
+      if (!n) next
+      img = w[1]; out = ""
+      while (match(img, /\$\{[A-Za-z0-9_]+\}|\$[A-Za-z0-9_]+/)) {
+        t = substr(img, RSTART, RLENGTH); k = t; gsub(/[${}]/, "", k)
+        out = out substr(img, 1, RSTART - 1) ((k in arg) ? arg[k] : t); img = substr(img, RSTART + RLENGTH)
+      }
+      img = out img
+      if (tolower(img) in stage) img = stage[tolower(img)]
+      if (n > 2 && toupper(w[2]) == "AS") stage[tolower(w[3])] = img
+      base = img
+    }
+    END { print base }
 
 jobs:
   test:
@@ -46,7 +82,7 @@ jobs:
       - name: Base image and SDK
         id: base
         run: |
-          base=$(awk 'toupper($1) == "FROM" { print $2; exit }' Dockerfile)
+          base=$(awk "$BASE_OF" Dockerfile)
           [ -n "$base" ] || { echo "no FROM in Dockerfile"; exit 1; }
           echo "base=$base" >> "$GITHUB_OUTPUT"
           echo "base: $base"
@@ -116,6 +152,31 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+      - name: Catalog bundle
+        env:
+          SLOWAPP_ENGINE: docker
+          SLOWAPP_TIMEOUT_SCALE: ${{ inputs.fixture-timeout-scale }}
+          SLOWD: ${{ inputs.slowd-image }}
+        run: |
+          if ! python -m slowapp_sdk catalog --help >/dev/null 2>&1; then
+            echo "::notice::this base's SDK has no catalog builder (slowapp-python 1.3.0 and later have it)"
+            exit 0
+          fi
+          args=()
+          if [ -n "$SLOWD" ]; then
+            if docker pull -q "$SLOWD"; then args=(--slowd-image "$SLOWD")
+            else echo "::warning::couldn't pull $SLOWD: full-panel pictures get blank strips"; fi
+          fi
+          python -m slowapp_sdk catalog build --image app:ci --out out/catalog "${args[@]}"
+          cat out/catalog/report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: catalog
+          path: out/catalog/
+          if-no-files-found: ignore
+          retention-days: 30
+
   armv7:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -133,8 +194,42 @@ jobs:
           context: .
           platforms: linux/arm/v7
           push: false
+          load: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          tags: app:armv7
           cache-from: type=gha,scope=app-armv7
           cache-to: type=gha,scope=app-armv7,mode=max
+
+      # Releases only: the examples timed on armv7 under QEMU, for the catalog ("measured in CI").
+      - name: SDK from the base image
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          base=$(awk "$BASE_OF" Dockerfile)
+          docker pull -q "$base"
+          cid=$(docker create "$base")
+          docker cp "$cid:/opt/slowapp" "$RUNNER_TEMP/slowapp"
+          docker rm "$cid" >/dev/null
+          echo "PYTHONPATH=$RUNNER_TEMP/slowapp" >> "$GITHUB_ENV"
+      - uses: actions/setup-python@v6
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          python-version: "3.13"
+      - name: Examples on armv7 (timings)
+        if: startsWith(github.ref, 'refs/tags/v')
+        continue-on-error: true
+        env:
+          SLOWAPP_ENGINE: docker
+          SLOWAPP_PLATFORM: linux/arm/v7
+          SLOWAPP_TIMEOUT_SCALE: ${{ inputs.armv7-timeout-scale }}
+        run: |
+          pip install pillow
+          python -m slowapp_sdk fixture --image app:armv7 --out out/armv7
+      - uses: actions/upload-artifact@v4
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          name: armv7-timings
+          path: out/armv7/summary.json
+          if-no-files-found: ignore
+          retention-days: 30
 
   publish:
     needs: [test, armv7]
@@ -196,3 +291,66 @@ jobs:
           else
             gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file notes.md
           fi
+
+      # The catalog bundle: the test job's renders plus the pushed image's sizes, the version and
+      # the armv7 timings; attached to the release and pushed as an OCI artifact referring to the
+      # image's digest (what the registry checks, and what the site and hubs render).
+      - uses: actions/download-artifact@v4
+        with:
+          name: catalog
+          path: out/catalog
+        continue-on-error: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: armv7-timings
+          path: out/armv7
+        continue-on-error: true
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Catalog bundle (release)
+        id: catalog
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+          REF: ${{ steps.v.outputs.ref }}
+          V: ${{ steps.v.outputs.version }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          if [ ! -f out/catalog/catalog.json ]; then
+            echo "::notice::no catalog bundle (the base's SDK predates it): the hub renders the examples itself"
+            exit 0
+          fi
+          base=$(awk "$BASE_OF" Dockerfile)
+          cid=$(docker create "$base")
+          docker cp "$cid:/opt/slowapp" "$RUNNER_TEMP/slowapp"
+          docker rm "$cid" >/dev/null
+          export PYTHONPATH="$RUNNER_TEMP/slowapp"
+          pip install pillow
+          args=()
+          [ -f out/armv7/summary.json ] && args+=(--armv7 out/armv7/summary.json)
+          [ -f CHANGELOG.md ] && args+=(--changelog CHANGELOG.md)
+          python -m slowapp_sdk catalog release out/catalog --ref "$REF" --digest "$DIGEST" --version "$V" "${args[@]}"
+          python -m slowapp_sdk catalog check out/catalog
+          id=$(python3 -c 'import json; print(json.load(open("out/catalog/catalog.json"))["app"]["id"])')
+          tar -czf "catalog-$id-$V.tar.gz" -C out/catalog catalog.json screens
+          cp out/catalog/catalog.json "catalog-$id-$V.json"
+          gh release upload "$GITHUB_REF_NAME" "catalog-$id-$V.json" "catalog-$id-$V.tar.gz" --clobber
+          echo "files=catalog-$id-$V.json:application/vnd.slowboard.catalog.v1+json catalog-$id-$V.tar.gz:application/vnd.slowboard.catalog.screens.v1.tar+gzip" >> "$GITHUB_OUTPUT"
+      - uses: oras-project/setup-oras@v1
+        if: steps.catalog.outputs.files != ''
+        with:
+          version: 1.2.0
+      - name: Catalog bundle as an OCI artifact on the image
+        if: steps.catalog.outputs.files != ''
+        env:
+          REF: ${{ steps.v.outputs.ref }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+          FILES: ${{ steps.catalog.outputs.files }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$TOKEN" | oras login ghcr.io -u "${{ github.actor }}" --password-stdin
+          # shellcheck disable=SC2086
+          oras attach --artifact-type application/vnd.slowboard.catalog.v1 "$REF@$DIGEST" $FILES
+          oras discover --artifact-type application/vnd.slowboard.catalog.v1 "$REF@$DIGEST"
+          printf '\nCatalog bundle: attached to this release and to `%s@%s` (artifact type application/vnd.slowboard.catalog.v1).\n' "$REF" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"

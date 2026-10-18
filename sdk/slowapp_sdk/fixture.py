@@ -32,10 +32,10 @@ from slowapp_kit.inks import InkError, blob_id, check_png
 
 from . import validate
 
-CONTRACT = 3
 SLOTS = {"left": (0, "red"), "middle": (452, "yellow"), "right": (908, "black")}   # the default layout
 SLOT_W = {"left": 452, "middle": 456, "right": 452}
 PANEL_W, PANEL_H, STRIP_H = 1360, 480, 36
+FULL = "full"   # the whole panel as one slot
 EXIT_NAMES = {0: "ok", 3: "unchanged", 4: "transient", 5: "needs config", 64: "contract error", 137: "killed"}
 
 
@@ -99,7 +99,7 @@ def run_args(m, example, image, data, out, inp, run_id, name, rundir):
         args += ["--tmpfs", f"/cache:rw,size={p['cache']['tmpfs_mb']}m"]
     if os.environ.get("SLOWAPP_PLATFORM"):
         args += ["--platform", os.environ["SLOWAPP_PLATFORM"]]
-    env = {"SLOWAPP_CONTRACT": str(CONTRACT), "SLOWAPP_APP": p["id"], "SLOWAPP_JOB": job, "SLOWAPP_RUN_ID": run_id,
+    env = {"SLOWAPP_CONTRACT": str(p.get("contract", 3)), "SLOWAPP_APP": p["id"], "SLOWAPP_JOB": job, "SLOWAPP_RUN_ID": run_id,
            "SLOWAPP_REASON": "fixture", "SLOWAPP_MODE": "fixture", "SLOWAPP_NOW": example["now"],
            "SLOWAPP_FOR": example["now"], "TZ": example.get("tz", "America/Vancouver"),
            "SLOWAPP_FEEDS": json.dumps(feeds_env(example)), "SLOWAPP_STATE": "/data"}
@@ -142,43 +142,45 @@ def run_example(app_dir, m, example, image):
 
 def check_out(out, example):
     """-> {feed: {"deck": deck, "cards": {id: (rgb image, blob id)}}}. Raises Fail on any contract break."""
-    res = {}
-    for feed, surface in example["feeds"].items():
-        size = tuple(int(v) for v in surface.split(".")[0].split("x"))
-        if feed == "prompts":
-            res[feed] = check_prompts(out, surface, size)
-            continue
-        root = out / "feeds" / feed
-        try:
-            deck = json.loads((root / "deck.json").read_text())
-        except (OSError, ValueError) as e:
-            raise Fail(f"{feed}: deck.json: {e}")
-        cards = deck.get("cards")
-        if not isinstance(cards, list) or not 1 <= len(cards) <= 32:
-            raise Fail(f"{feed}: deck.json needs 1-32 cards")
-        try:
-            vf, vu = (datetime.fromisoformat(deck[k]) for k in ("valid_from", "valid_until"))
-        except (KeyError, TypeError, ValueError) as e:
-            raise Fail(f"{feed}: valid_from / valid_until: {e}")
-        if vf.tzinfo is None or vu.tzinfo is None or vu <= vf:
-            raise Fail(f"{feed}: valid_from / valid_until need offsets and valid_until > valid_from")
-        got = {}
-        for i, c in enumerate(cards):
-            if c.get("kind") != ("home" if i == 0 else "detail"):
-                raise Fail(f"{feed}/{c.get('id')}: kind {c.get('kind')!r}; the first card is home, the rest detail")
-            if not c.get("title"):
-                raise Fail(f"{feed}/{c.get('id')}: no title")
-            try:
-                data = (root / "cards" / f"{c['id']}.png").read_bytes()
-                rgb = check_png(data, size)
-            except (OSError, InkError, KeyError) as e:
-                raise Fail(f"{feed}/{c.get('id')}: {e}")
-            got[c["id"]] = (rgb, blob_id(rgb))
-        res[feed] = {"deck": deck, "cards": got}
+    res = {feed: check_feed(out, feed, surface) for feed, surface in example["feeds"].items()}
     for extra in ("summary.json", ".metrics.json"):
         if (out / extra).exists():
             json.loads((out / extra).read_text())
     return res
+
+
+def check_feed(out, feed, surface):
+    """One feed's output at `surface`: {"deck": deck, "cards": {id: (rgb image, blob id)}}, or Fail."""
+    size = tuple(int(v) for v in surface.split(".")[0].split("x"))
+    if feed == "prompts":
+        return check_prompts(out, surface, size)
+    root = out / "feeds" / feed
+    try:
+        deck = json.loads((root / "deck.json").read_text())
+    except (OSError, ValueError) as e:
+        raise Fail(f"{feed}: deck.json: {e}")
+    cards = deck.get("cards")
+    if not isinstance(cards, list) or not 1 <= len(cards) <= 32:
+        raise Fail(f"{feed}: deck.json needs 1-32 cards")
+    try:
+        vf, vu = (datetime.fromisoformat(deck[k]) for k in ("valid_from", "valid_until"))
+    except (KeyError, TypeError, ValueError) as e:
+        raise Fail(f"{feed}: valid_from / valid_until: {e}")
+    if vf.tzinfo is None or vu.tzinfo is None or vu <= vf:
+        raise Fail(f"{feed}: valid_from / valid_until need offsets and valid_until > valid_from")
+    got = {}
+    for i, c in enumerate(cards):
+        if c.get("kind") != ("home" if i == 0 else "detail"):
+            raise Fail(f"{feed}/{c.get('id')}: kind {c.get('kind')!r}; the first card is home, the rest detail")
+        if not c.get("title"):
+            raise Fail(f"{feed}/{c.get('id')}: no title")
+        try:
+            data = (root / "cards" / f"{c['id']}.png").read_bytes()
+            rgb = check_png(data, size)
+        except (OSError, InkError, KeyError) as e:
+            raise Fail(f"{feed}/{c.get('id')}: {e}")
+        got[c["id"]] = (rgb, blob_id(rgb))
+    return {"deck": deck, "cards": got}
 
 
 BINDINGS = ("own.tap", "spare.tap", "own.hold", "spare.hold")
@@ -232,29 +234,41 @@ def check_prompts(out, surface, size):
     return {"deck": {"cards": cards}, "cards": got, "prompts": True}
 
 
-def frame(res):
-    """Home cards spliced into a white full frame, strips left blank (slowbd draws them). A feed
-    named after a slot goes there; any other takes the next free slot whose width matches."""
-    img = Image.new("RGB", (PANEL_W, PANEL_H), (255, 255, 255))
+def place(res):
+    """Feed -> slot for the default layout: a feed named after a slot goes there; any other takes
+    the next free slot whose width matches its home card. A feed as wide as the panel is the whole
+    panel (FULL, one slot) and nothing else shows. Prompts are overlays, never placed."""
     res = {f: r for f, r in res.items() if not r.get("prompts")}
+    homes = {f: r["cards"][r["deck"]["cards"][0]["id"]][0] for f, r in res.items()}
+    for f, home in homes.items():
+        if home.width == PANEL_W:
+            return {f: FULL}
     free = list(SLOTS)
     placed = {f: f for f in res if f in SLOTS}
     for f in placed:
         free.remove(f)
-    for feed, r in res.items():
-        if feed not in placed:
-            home = r["cards"][r["deck"]["cards"][0]["id"]][0]
+    for f, home in homes.items():
+        if f not in placed:
             fits = [s for s in free if SLOT_W[s] == home.width]
             if fits:
-                placed[feed] = fits[0]
+                placed[f] = fits[0]
                 free.remove(fits[0])
+    return placed
+
+
+def frame(res):
+    """Home cards spliced into a white full frame, strips left blank (slowbd draws them), placed
+    as place() says."""
+    img = Image.new("RGB", (PANEL_W, PANEL_H), (255, 255, 255))
+    placed = place(res)
     for feed, slot in placed.items():
         r = res[feed]
         home = r["deck"]["cards"][0]["id"]
-        img.paste(r["cards"][home][0], (SLOTS[slot][0], 0))
-    for x in (451, 907):
-        for y in range(PANEL_H - STRIP_H, PANEL_H, 2):
-            img.putpixel((x, y), (0, 0, 0))
+        img.paste(r["cards"][home][0], (0 if slot == FULL else SLOTS[slot][0], 0))
+    if FULL not in placed.values():
+        for x in (451, 907):
+            for y in range(PANEL_H - STRIP_H, PANEL_H, 2):
+                img.putpixel((x, y), (0, 0, 0))
     return img
 
 

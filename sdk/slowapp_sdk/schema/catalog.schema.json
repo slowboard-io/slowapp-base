@@ -1,0 +1,232 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://slowboard.io/schema/catalog-1.json",
+  "title": "Slowapp catalog bundle (catalog.json, version 1)",
+  "description": "Written by `slowapp catalog build` and `release` in an app's CI; see MANIFEST.md \"Catalog bundle\". Files are relative to the bundle's root. Structural rules only; `slowapp catalog check` adds the cross-field rules and the file hashes.",
+  "type": "object",
+  "required": ["catalog", "app", "manifest", "manifest_sha256", "grants", "feeds", "examples", "screens", "standard_surfaces", "made"],
+  "additionalProperties": false,
+  "properties": {
+    "catalog": {"const": 1},
+    "app": {
+      "type": "object",
+      "required": ["id", "title", "contract", "image"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,23}$"},
+        "title": {"type": "string", "minLength": 1, "maxLength": 40},
+        "contract": {"enum": [3, 4]},
+        "image": {"type": "string", "minLength": 1, "maxLength": 200},
+        "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+        "author": {"type": "string", "minLength": 1, "maxLength": 64},
+        "blurb": {"type": "string", "minLength": 1, "maxLength": 100},
+        "about": {"type": "string", "minLength": 1, "maxLength": 800},
+        "ink": {"enum": ["black", "white", "yellow", "red"]},
+        "license": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9.+() -]{0,63}$"},
+        "repo": {"type": "string", "maxLength": 200, "pattern": "^https://[^/\\s][^\\s]*$"}
+      }
+    },
+    "manifest": {"type": "object", "required": ["app"]},
+    "manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "grants": {
+      "type": "object",
+      "required": ["network", "memory", "secrets", "optional_secrets", "prompts", "ui", "backend", "imports", "exports", "events"],
+      "additionalProperties": false,
+      "properties": {
+        "network": {"enum": ["none", "egress"]},
+        "memory": {"type": "string", "pattern": "^[0-9]+[kmg]$"},
+        "tmp": {"type": "string", "pattern": "^[0-9]+[kmg]$"},
+        "data_mb": {"type": "integer", "minimum": 0},
+        "cache_mb": {"type": "integer", "minimum": 0},
+        "secrets": {"$ref": "#/$defs/strings"},
+        "optional_secrets": {"$ref": "#/$defs/strings"},
+        "prompts": {"type": "boolean"},
+        "ui": {"type": "boolean"},
+        "backend": {"type": "boolean"},
+        "imports": {"$ref": "#/$defs/strings"},
+        "exports": {"$ref": "#/$defs/strings"},
+        "events": {"$ref": "#/$defs/strings"}
+      }
+    },
+    "feeds": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "size", "surfaces", "supported", "inks", "screens"],
+        "additionalProperties": false,
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "size": {"type": "string", "pattern": "^(slot|[0-9]{1,4}x[0-9]{1,4})$"},
+          "surfaces": {
+            "type": "object",
+            "propertyNames": {"$ref": "#/$defs/surface"},
+            "additionalProperties": {
+              "type": "object",
+              "required": ["ok"],
+              "additionalProperties": false,
+              "properties": {"ok": {"type": "boolean"}, "error": {"type": "string", "maxLength": 1000}}
+            }
+          },
+          "supported": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/surface"}},
+          "inks": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/ink"}},
+          "screens": {
+            "type": "object",
+            "propertyNames": {"$ref": "#/$defs/kind"},
+            "additionalProperties": {"type": "integer", "minimum": 1}
+          }
+        }
+      }
+    },
+    "examples": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "now", "job", "feeds"],
+        "additionalProperties": false,
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "caption": {"type": "string"},
+          "now": {"type": "string"},
+          "tz": {"type": "string"},
+          "job": {"type": "string"},
+          "settings": {"type": "object"},
+          "feeds": {"type": "object", "additionalProperties": {"$ref": "#/$defs/surface"}},
+          "seconds": {"type": "number", "minimum": 0},
+          "memory_peak_kb": {"type": "integer", "minimum": 0},
+          "platform": {"type": "string"},
+          "error": {"type": "string"},
+          "errors": {"$ref": "#/$defs/strings"},
+          "frames": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["kind", "file", "sha256", "strips"],
+              "additionalProperties": false,
+              "properties": {
+                "kind": {"enum": ["home", "prompt"]},
+                "file": {"$ref": "#/$defs/file"},
+                "sha256": {"$ref": "#/$defs/sha256"},
+                "strips": {"type": "boolean"},
+                "prompt": {"type": "string"}
+              }
+            }
+          },
+          "prompts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["id", "question", "ask", "bindings"],
+              "additionalProperties": false,
+              "properties": {
+                "id": {"type": "string"},
+                "question": {"type": "string"},
+                "ask": {"type": "boolean"},
+                "slot_hint": {"type": "string"},
+                "bindings": {"type": "object", "additionalProperties": {"type": "string"}}
+              }
+            }
+          }
+        }
+      }
+    },
+    "screens": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["example", "feed", "surface", "card", "kind", "title", "file", "sha256", "inks"],
+        "additionalProperties": false,
+        "properties": {
+          "example": {"type": "string"},
+          "feed": {"type": "string"},
+          "surface": {"$ref": "#/$defs/surface"},
+          "card": {"type": "string", "minLength": 1},
+          "kind": {"$ref": "#/$defs/kind"},
+          "binding": {"enum": ["own.tap", "spare.tap", "own.hold", "spare.hold"]},
+          "title": {"type": "string"},
+          "file": {"$ref": "#/$defs/file"},
+          "sha256": {"$ref": "#/$defs/sha256"},
+          "inks": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/ink"}}
+        }
+      }
+    },
+    "ui": {
+      "type": "object",
+      "required": ["entry", "bytes", "gzip_bytes", "sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "entry": {"type": "string"},
+        "bytes": {"type": "integer", "minimum": 0},
+        "gzip_bytes": {"type": "integer", "minimum": 0},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "image": {
+      "type": "object",
+      "required": ["ref", "digest", "platforms"],
+      "additionalProperties": false,
+      "properties": {
+        "ref": {"type": "string"},
+        "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "base": {"type": "string"},
+        "platforms": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["download", "adds_download", "layers", "shared_layers"],
+            "additionalProperties": false,
+            "properties": {
+              "download": {"type": "integer", "minimum": 0},
+              "unpacked": {"type": "integer", "minimum": 0},
+              "adds_download": {"type": "integer", "minimum": 0},
+              "adds_unpacked": {"type": "integer", "minimum": 0},
+              "layers": {"type": "integer", "minimum": 0},
+              "shared_layers": {"type": "integer", "minimum": 0}
+            }
+          }
+        }
+      }
+    },
+    "release": {
+      "type": "object",
+      "required": ["version", "tag"],
+      "additionalProperties": false,
+      "properties": {
+        "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+        "tag": {"type": "string"},
+        "changelog": {"type": "string", "maxLength": 8000}
+      }
+    },
+    "measured": {
+      "type": "object",
+      "properties": {"note": {"type": "string"}},
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {"seconds": {"type": "number"}, "memory_peak_kb": {"type": "integer"}}
+        }
+      }
+    },
+    "standard_surfaces": {"type": "array", "items": {"$ref": "#/$defs/surface"}},
+    "made": {
+      "type": "object",
+      "required": ["at", "sdk", "slowd", "platform"],
+      "additionalProperties": false,
+      "properties": {
+        "at": {"type": "string"},
+        "sdk": {"type": "string"},
+        "slowd": {"type": "string"},
+        "platform": {"type": "string"}
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "surface": {"type": "string", "pattern": "^[0-9]{1,4}x[0-9]{1,4}\\.(k4|g16)$"},
+    "ink": {"enum": ["black", "white", "yellow", "red"]},
+    "kind": {"enum": ["home", "detail", "ask", "answer"]},
+    "file": {"type": "string", "pattern": "^screens/[A-Za-z0-9._/~-]+\\.png$"},
+    "strings": {"type": "array", "uniqueItems": true, "items": {"type": "string"}}
+  }
+}

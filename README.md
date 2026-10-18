@@ -58,9 +58,12 @@ The reusable workflow [`.github/workflows/app.yml`](.github/workflows/app.yml) r
 2. Validates the manifest and runs the unit tests inside the base.
 3. Builds the image and runs every example in fixture mode twice, requiring identical pixels.
 4. Uploads the previews.
-5. Builds for armv7.
-6. On a `vX.Y.Z` tag, pushes the image for all three platforms and writes the digest to pin in
-   `slowbhub.toml` into the release notes.
+5. Builds the catalog bundle: every example at every size, full-panel pictures with slowd's
+   strips, inks, grants (MANIFEST.md, "Catalog bundle"). Needs a base with SDK 1.3.0 or later.
+6. Builds for armv7.
+7. On a `vX.Y.Z` tag, pushes the image for all three platforms, writes the digest to pin in
+   `slowbhub.toml` into the release notes, times the examples on armv7, and attaches the
+   finished catalog bundle to the release and to the image.
 
 Locally, with Docker or Podman:
 
@@ -114,7 +117,7 @@ outside this repo can't install them.
 images/python/Dockerfile       slowapp-python
 images/python-sci/Dockerfile   slowapp-python-sci (ARG BASE)
 kit/slowapp_kit/               the app side of the contract: context, output checks, jobs, UI server
-sdk/slowapp_sdk/               `python3 -m slowapp_sdk validate|fixture`, and the manifest schema
+sdk/slowapp_sdk/               `python3 -m slowapp_sdk validate|fixture|catalog`, the manifest and catalog schemas
 example/                       the moon app, the images' smoke test (the template repo's twin); example/ui its UI
 js/                            @slowboard/app, app-react, ui and dev (npm workspaces; package.json at the root)
 fonts/                         baked into the images at /opt/slowapp/fonts (licences alongside)
