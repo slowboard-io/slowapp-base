@@ -204,10 +204,10 @@ class Output(Env):
 class Contract4(Env):
     """Docs, args and results (app UIs)."""
 
-    def test_both_contracts_and_no_other(self):
-        self.assertEqual(self.ctx(SLOWAPP_CONTRACT="3").app, self.ctx(SLOWAPP_CONTRACT="4").app)
+    def test_contracts_3_to_5_and_no_other(self):
+        self.assertEqual(self.ctx(SLOWAPP_CONTRACT="3").app, self.ctx(SLOWAPP_CONTRACT="5").app)
         with self.assertRaises(kit.ContractError):
-            self.ctx(SLOWAPP_CONTRACT="5")
+            self.ctx(SLOWAPP_CONTRACT="6")
 
     def test_args_and_docs_from_in(self):
         ctx = self.ctx()
@@ -234,6 +234,71 @@ class Contract4(Env):
                 ctx.write_doc(bad, 1)
         with self.assertRaises(kit.ContractError):
             ctx.result("x" * (300 * 1024))
+
+
+SLEEP = json.dumps([{"feed": "sleep", "w": 1360, "h": 360, "inks": "g16", "bpp": 8}])
+DEVICE = json.dumps({"id": "d_x", "profile": "supernote", "w": 1404, "h": 1872, "inks": "g16"})
+
+
+def greyed(w=1360, h=360):
+    img = Image.new("RGB", (w, h), kit.grey(15))
+    d = ImageDraw.Draw(img)
+    d.rectangle((10, 10, 300, 100), fill=kit.grey(0))
+    d.rectangle((320, 10, 600, 100), fill=kit.grey(8))
+    return img
+
+
+class Contract5(Env):
+    """g16 feeds for other glass, and the device a run draws for."""
+
+    def test_device_and_g16_feeds_from_the_environment(self):
+        ctx = self.ctx(SLOWAPP_CONTRACT="5", SLOWAPP_FEEDS=SLEEP, SLOWAPP_DEVICE=DEVICE)
+        self.assertEqual(ctx.device, kit.Device("d_x", "supernote", 1404, 1872, "g16"))
+        self.assertEqual(ctx.feed("sleep").name, "1360x360.g16")
+        self.assertIsNone(self.ctx().device, "no SLOWAPP_DEVICE: an older hub or fixture mode")
+        with self.assertRaises(kit.ContractError):
+            self.ctx(SLOWAPP_DEVICE="{}")
+
+    def test_g16_png_is_8_bit_grey_on_the_levels(self):
+        data = kit.encode_png(greyed(), "g16")
+        self.assertEqual((data[24], data[25]), (8, 0), "8-bit grey")
+        self.assertNotIn(b"PLTE", data)
+        rgb = kit.check_png(data, (1360, 360), "g16")
+        self.assertEqual(rgb.getpixel((20, 20)), (0, 0, 0))
+        self.assertEqual(rgb.getpixel((400, 20)), (136, 136, 136))
+        off = greyed()
+        off.putpixel((700, 200), (130, 130, 130))
+        with self.assertRaises(kit.InkError):
+            kit.encode_png(off, "g16")
+        with self.assertRaises(kit.InkError, msg="k4 PNG where g16 is expected"):
+            kit.check_png(kit.encode_png(drawn()), (452, 444), "g16")
+        with self.assertRaises(kit.InkError, msg="red isn't a grey"):
+            kit.check_inks(drawn(), "g16")
+
+    def test_g16_blob_id_is_sbp8_over_grey_rows(self):
+        img = greyed(8, 2)
+        want = hashlib.sha256(b"SBP8" + struct.pack("<HH", 8, 2) + img.convert("L").tobytes()).hexdigest()
+        self.assertEqual(kit.blob_id(img, "g16"), want)
+        # The hub's fixture: PackedImage::filled(P8, 1360, 360, 0x88).
+        flat = Image.new("RGB", (1360, 360), kit.grey(8))
+        want = hashlib.sha256(b"SBP8" + struct.pack("<HH", 1360, 360) + b"\x88" * (1360 * 360)).hexdigest()
+        self.assertEqual(kit.blob_id(kit.encode_png(flat, "g16"), "g16"), want)
+
+    def test_snap_g16(self):
+        ramp = Image.linear_gradient("L").resize((256, 4)).convert("RGB")
+        for dither in (False, True):
+            snapped = kit.snap_g16(ramp, dither=dither)
+            kit.check_inks(snapped, "g16")
+        self.assertEqual(kit.snap_g16(Image.new("RGB", (1, 1), (130, 130, 130))).getpixel((0, 0)), kit.grey(8))
+        with self.assertRaises(ValueError):
+            kit.grey(16)
+
+    def test_write_feed_in_g16(self):
+        ctx = self.ctx(SLOWAPP_CONTRACT="5", SLOWAPP_FEEDS=SLEEP)
+        doc = ctx.write_feed("sleep", [Card("home", greyed(), title="Today")])
+        self.assertEqual(doc["surface"], "1360x360.g16")
+        png = (Path(self.env["SLOWAPP_OUT"]) / "feeds" / "sleep" / "cards" / "home.png").read_bytes()
+        kit.check_png(png, (1360, 360), "g16")
 
 
 class Net(Env):
@@ -294,6 +359,13 @@ class Net(Env):
         c3.fetch("a.json", lambda: {"t": 2})
         c3.exit_if_unchanged()                                # changed: carries on
         # the live snapshot is the fixture
+        kit.net.remember(c3)
+        # contract 5: another device's run of the same job, on the same data, isn't unchanged
+        dev = json.dumps({"id": "supernote", "profile": "supernote", "w": 1404, "h": 1872, "inks": "g16"})
+        d = self.ctx(SLOWAPP_DEVICE=dev)
+        d.fetch("a.json", lambda: {"t": 2})
+        d.exit_if_unchanged()
+        self.assertNotEqual(kit.net.snapshot_hash(d), kit.net.snapshot_hash(c3))
         f = self.ctx(SLOWAPP_MODE="fixture")
         self.assertEqual(f.fetch("a.json", lambda: self.fail("fn must not run in fixture mode")), {"t": 2})
         with self.assertRaises(kit.ContractError):

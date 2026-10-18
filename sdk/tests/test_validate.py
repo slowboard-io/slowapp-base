@@ -138,7 +138,7 @@ class Rules(unittest.TestCase):
 
     def test_structure(self):
         self.bad(CALENDAR.replace('network = "egress"', 'network = "lan"'), "not one of")
-        self.bad(CALENDAR.replace('contract = 3', 'contract = 2'), "not one of [3, 4]")
+        self.bad(CALENDAR.replace('contract = 3', 'contract = 2'), "not one of [3, 4, 5]")
         self.bad(CALENDAR.replace('memory = "96m"', 'memory = "96MB"'), "doesn't match")
         self.bad(CALENDAR.replace('title = "Calendar"\n', ''), "missing 'title'")
         self.bad(CALENDAR + "\n[extra]\nx = 1\n", "unknown key 'extra'")
@@ -191,6 +191,29 @@ class Contract4(unittest.TestCase):
         self.assertFalse([e for e in errs if "ui" in e], errs)
         _, warns = check(CALENDAR4.replace('entry = "/ui/index.html"', 'entry = "/ui/index.html"\nidle_s = 60'))
         self.assertTrue(any("only apply to a backend" in w for w in warns), warns)
+
+
+# Contract 5: a fixed-size g16 feed for a sleep screen beside the board's slot feed.
+CALENDAR5 = (CALENDAR.replace("contract = 3", "contract = 5").replace("[ui]\n", "[ui]\nbackend = true\n")
+             .replace('[[feed]]\nname = "agenda"\nsize = "slot"\n',
+                      '[[feed]]\nname = "agenda"\nsize = "slot"\n\n[[feed]]\nname = "sleep"\nsize = "1360x360"\ninks = ["g16"]\n')
+             + '\n[[example]]\nname = "sleep"\nfixture = "fixtures/busy-week"\nnow = "2026-10-06T08:00:00-07:00"\n'
+             + 'feeds = { sleep = "1360x360.g16" }\n')
+
+
+class Contract5(unittest.TestCase):
+    bad = Rules.bad
+
+    def test_g16_feed_validates(self):
+        errs, _ = check(CALENDAR5)
+        self.assertEqual(errs, [])
+
+    def test_rules(self):
+        self.bad(CALENDAR5.replace("contract = 5", "contract = 4"), "need contract = 5")
+        self.bad(CALENDAR5.replace('inks = ["g16"]', 'inks = ["g8"]'), "not one of")
+        self.bad(CALENDAR5.replace('inks = ["g16"]', "inks = []"), "at least 1")
+        self.bad(CALENDAR5.replace('sleep = "1360x360.g16"', 'sleep = "1360x360.k4"'), "isn't drawn in k4")
+        self.bad(CALENDAR5.replace('size = "slot"\n', 'size = "slot"\ninks = ["g16"]\n', 1), "board's k4")
 
 
 if __name__ == "__main__":

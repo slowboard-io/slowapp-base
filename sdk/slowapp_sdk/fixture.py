@@ -28,7 +28,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from slowapp_kit.inks import InkError, blob_id, check_png
+from slowapp_kit.inks import BPP, InkError, blob_id, check_png
 
 from . import validate
 
@@ -62,8 +62,8 @@ def feeds_env(example):
     for feed, surface in example["feeds"].items():
         size, inks = surface.split(".")
         w, h = (int(v) for v in size.split("x"))
-        slot = feed if feed in SLOTS else None
-        out.append({"feed": feed, "slot": slot, "w": w, "h": h, "inks": inks, "bpp": 2,
+        slot = feed if feed in SLOTS and inks == "k4" else None
+        out.append({"feed": feed, "slot": slot, "w": w, "h": h, "inks": inks, "bpp": BPP[inks],
                     "key": SLOTS[slot][1] if slot else None})
     return out
 
@@ -152,6 +152,7 @@ def check_out(out, example):
 def check_feed(out, feed, surface):
     """One feed's output at `surface`: {"deck": deck, "cards": {id: (rgb image, blob id)}}, or Fail."""
     size = tuple(int(v) for v in surface.split(".")[0].split("x"))
+    inks = surface.split(".")[1]
     if feed == "prompts":
         return check_prompts(out, surface, size)
     root = out / "feeds" / feed
@@ -176,11 +177,11 @@ def check_feed(out, feed, surface):
             raise Fail(f"{feed}/{c.get('id')}: no title")
         try:
             data = (root / "cards" / f"{c['id']}.png").read_bytes()
-            rgb = check_png(data, size)
+            rgb = check_png(data, size, inks)
         except (OSError, InkError, KeyError) as e:
             raise Fail(f"{feed}/{c.get('id')}: {e}")
-        got[c["id"]] = (rgb, blob_id(rgb))
-    return {"deck": deck, "cards": got}
+        got[c["id"]] = (rgb, blob_id(rgb, inks))
+    return {"deck": deck, "cards": got, "inks": inks}
 
 
 BINDINGS = ("own.tap", "spare.tap", "own.hold", "spare.hold")
@@ -237,8 +238,10 @@ def check_prompts(out, surface, size):
 def place(res):
     """Feed -> slot for the default layout: a feed named after a slot goes there; any other takes
     the next free slot whose width matches its home card. A feed as wide as the panel is the whole
-    panel (FULL, one slot) and nothing else shows. Prompts are overlays, never placed."""
-    res = {f: r for f, r in res.items() if not r.get("prompts")}
+    panel (FULL, one slot) and nothing else shows. Prompts are overlays, never placed; feeds for
+    other glass (contract 5: g16, such as a 1360-wide sleep strip) aren't the board's, and their
+    cards are previewed on their own."""
+    res = {f: r for f, r in res.items() if not r.get("prompts") and r.get("inks", "k4") == "k4"}
     homes = {f: r["cards"][r["deck"]["cards"][0]["id"]][0] for f, r in res.items()}
     for f, home in homes.items():
         if home.width == PANEL_W:

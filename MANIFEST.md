@@ -1,4 +1,4 @@
-# App manifest (`slowapp.toml`), contract 4
+# App manifest (`slowapp.toml`), contract 5
 
 A slowapp is an OCI image plus this manifest (the hub's design: epaper-dashboard
 `docs/SLOWBOARD.md` §8; section numbers below refer to it). The manifest says what the app may
@@ -10,6 +10,11 @@ entry`), hub-stored JSON docs the UI edits (`[docs.<name>]`), and jobs a UI call
 (`[[job]] args`, `/in/args.json`, `/out/result.json`). A contract 3 manifest still validates and
 still loads on a contract 4 hub; contract 4 keys need `contract = 4`. The JavaScript side is in
 [`js/`](js/) (README: "App UIs").
+
+**Contract 5** adds feeds for other glass, such as a Supernote's greyscale sleep screen.
+- A `[[feed]]` may declare `inks = ["g16"]`, which is sixteen greys.
+- A fixed-size feed is drawn for any device that asks for it.
+- The hub runs `render` once per device. Each run's `SLOWAPP_FEEDS` holds only that device's feeds, and `SLOWAPP_DEVICE` (`ctx.device`) names the device. So draw what's asked for and nothing else.
 
 - Structure: [`sdk/slowapp_sdk/schema/slowapp.schema.json`](sdk/slowapp_sdk/schema/slowapp.schema.json) (JSON Schema 2020-12).
 - Rules a schema can't express: [`sdk/slowapp_sdk/validate.py`](sdk/slowapp_sdk/validate.py), listed below.
@@ -40,7 +45,7 @@ tests/             unit tests, run inside the base image
 |---|---|---|
 | `id` | string, `[a-z][a-z0-9-]{1,23}` | Names the container `sb-<id>`; the repo is `slowapp-<id>` by convention. |
 | `title` | string, ≤ 40 | Shown on the hub's app card. |
-| `contract` | `3` or `4` | The contract the app is written to (2 was 3 with `[pane]` and `EPAPER_*`). Its jobs get it as `SLOWAPP_CONTRACT`. |
+| `contract` | `3`, `4` or `5` | The contract the app is written to (2 was 3 with `[pane]` and `EPAPER_*`). Its jobs get it as `SLOWAPP_CONTRACT`. |
 | `image` | string | Registry path without tag; the hub's config pins `image@sha256:…`. |
 | `memory` | size (`96m`, `1g`) | Hard limit: `--memory` = `--memory-swap`. Charged at admission (§7.4). |
 | `tmp` | size | `--tmpfs /tmp:size=`. Counts against `memory`. |
@@ -109,8 +114,20 @@ Triggers are implied (E13): `on_demand` is always true and boot or fallback rule
 
 ## `[[feed]]`
 
-`name` and `size`. `size = "slot"` means slot width × (480 − strip height) in the slot's inks, so
-the hub passes the real surface in `SLOWAPP_FEEDS` (E4); `"WxH"` fixes it.
+| Key | Meaning |
+|---|---|
+| `name` | `[a-z][a-z0-9_-]*`. |
+| `size` | `"slot"`: slot width × (480 − strip height) in the slot's inks, and the hub passes the real surface in `SLOWAPP_FEEDS` (E4). `"WxH"` fixes it; contract 5 draws a fixed-size feed for any device whose needs ask for it at that size. |
+| `inks` | Contract 5. The ink sets the app draws the feed in: `k4` (the board's four inks, a 2-bit indexed PNG) or `g16` (sixteen greys 0, 17 … 255, an 8-bit grey PNG). Default `["k4"]`. A slot feed must include `k4`. |
+
+```toml
+[[feed]]          # today and five days for a Supernote's sleep screen
+name = "sleep"
+size = "1360x360"
+inks = ["g16"]
+```
+
+The kit draws g16 with `grey(level)` colours (0 black … 15 white), or `snap_g16(img, dither=False)` over a free-form drawing. Text antialiasing lands between levels, and snapping fixes it.
 
 ## `[[example]]`
 
@@ -141,8 +158,10 @@ repo every push renders the examples.
   part; a doc's `on_change` jobs are declared; `[ui] entry`/`backend`, `[docs]` and job `args`
   need `contract = 4`. Warnings: backend-only `[ui]` keys next to a bundle-only UI, `[docs]`
   without a UI.
-- Each example's fixture directory exists, its job and feeds are declared, and a fixed-size feed
-  matches the example's surface. Warnings: a slot surface other than 452/456 × 444, a feed with no
+- Contract 5: `inks` other than `["k4"]` need `contract = 5`; a slot feed includes `k4`; the
+  `prompts` feed is a k4 slot feed.
+- Each example's fixture directory exists, its job and feeds are declared, a fixed-size feed
+  matches the example's surface, and the surface's ink set is one of the feed's `inks`. Warnings: a slot surface other than 452/456 × 444, a feed with no
   example, a required setting with no default.
 
 ## What the container sees
@@ -153,9 +172,10 @@ The full tables are docs/SLOWBOARD.md §8.2–§8.4; `slowapp_kit` reads all of 
   UI gets jobs as `POST /_sb/jobs/<name>` with slowbhub's body `{"run_id", "out", "env"}`: the kit
   applies the per-run keys of `env` (`SLOWAPP_FEEDS`, `SLOWAPP_NOW`/`FOR`/`DEADLINE`, `SLOWAPP_REASON`,
   `SLOWAPP_MODE`, `SLOWAPP_RUN_ID`, `TZ`), ignores the rest, and writes to `out` (under `/out`).
-- **Environment:** `SLOWAPP_CONTRACT` (the app's: `3` or `4`), `SLOWAPP_APP`, `SLOWAPP_JOB`, `SLOWAPP_RUN_ID`, `SLOWAPP_REASON`,
+- **Environment:** `SLOWAPP_CONTRACT` (the app's: `3` to `5`), `SLOWAPP_APP`, `SLOWAPP_JOB`, `SLOWAPP_RUN_ID`, `SLOWAPP_REASON`,
   `SLOWAPP_NOW`, `SLOWAPP_FOR`, `SLOWAPP_DEADLINE`, `TZ`, `SLOWAPP_MODE` (`live` | `fixture`),
-  `SLOWAPP_FEEDS`, `SLOWAPP_STATE=/data`; BLAS threads are 1.
+  `SLOWAPP_FEEDS`, `SLOWAPP_STATE=/data`; contract 5: `SLOWAPP_DEVICE`
+  (`{"id","profile","w","h","inks"}`, unset in fixture mode); BLAS threads are 1.
 - **Mounts:** `/data` (rw; ro fixture copy), `/out`, `/in` (ro: `settings.json`, `layout.json`,
   `events.jsonl`; contract 4 adds `args.json` and `docs/<name>.json`), `/tmp` and `/cache` (tmpfs),
   `/run/secrets/<name>` (ro, live only), `/run/sb` (`ui.sock`, and `ui.log`: the UI's stderr and
@@ -164,8 +184,9 @@ The full tables are docs/SLOWBOARD.md §8.2–§8.4; `slowapp_kit` reads all of 
   `prompts/<id>/<binding>.png`, and optionally its question card `prompts/<id>/ask.png`
   (`"ask"` in prompts.json). With a question card the prompt takes its slot's whole body and the
   strip shows only the answers; without one the question goes in the strip.
-- **Output:** `/out/feeds/<feed>/deck.json` and `cards/<id>.png` (exact surface size, 2- or 8-bit
-  indexed, PLTE within the inks, no tRNS, ≤ 256 KB, ≤ 32 cards), plus optional `prompts.json`,
+- **Output:** `/out/feeds/<feed>/deck.json` and `cards/<id>.png` (exact surface size; k4: 2- or
+  8-bit indexed, PLTE within the inks; g16: 8-bit grey on the sixteen levels; no tRNS, ≤ 256 KB,
+  ≤ 32 cards), plus optional `prompts.json`,
   `summary.json`, `cache_key`, `timing.json` and the kit's `.metrics.json`. Contract 4:
   `result.json` (back to the UI's `jobs.run`) and `docs/<name>.json`.
 - **Exit codes:** 0 ingest · 3 unchanged · 4 transient · 5 needs config · 64 contract error ·

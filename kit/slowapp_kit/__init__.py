@@ -1,4 +1,4 @@
-"""slowapp_kit: the app side of contracts 3 and 4 (see MANIFEST.md and the hub's docs/SLOWBOARD.md §8).
+"""slowapp_kit: the app side of contracts 3 to 5 (see MANIFEST.md and the hub's docs/SLOWBOARD.md §8).
 
 An app is a container whose command is `job <name>` or `serve`. It reads its run from the
 environment (SLOWAPP_*), draws each requested feed at its surface size in the four inks, and
@@ -23,6 +23,15 @@ Contract 4 (app UIs): ctx.args (/in/args.json from the UI's jobs.run), ctx.docs 
 ctx.doc(name) (the hub-stored docs, /in/docs), ctx.write_doc(name, value) (/out/docs, applied if
 the doc didn't change meanwhile) and ctx.result(value) (/out/result.json, back to the UI).
 
+Contract 5 (feeds for other glass): a feed may declare `inks = ["g16"]` and a fixed size, and the
+hub runs the render job once per device that needs it. ctx.device is that device (id, profile,
+w, h, inks; None in fixture mode) and ctx.feeds holds only its feeds, so draw what's asked for:
+
+    for s in ctx.feeds:
+        if s.inks == "g16":                       # a greyscale sleep screen
+            img = snap_g16(draw_today(s.w, s.h))  # or grey(level) colours throughout
+        ...
+
 What it covers: the ink check and exact-size check on every card; blob ids (for tests); secret()
 that honours fixture mode; fetch-then-draw snapshots that double as fixtures; an HTTP helper that
 fits the deadline; /out/.metrics.json; one handler serving both the CLI and the warm UI; and BLAS
@@ -38,11 +47,11 @@ import sys  # noqa: E402
 from PIL import ImageFont  # noqa: E402
 
 from . import net, output  # noqa: E402
-from .context import Context, Surface, load_manifest  # noqa: E402
+from .context import Context, Device, Surface, load_manifest  # noqa: E402
 from .errors import (EXIT_CONTRACT, EXIT_NEEDS_CONFIG, EXIT_OK, EXIT_TRANSIENT, EXIT_UNCHANGED,  # noqa: E402
                      ContractError, JobExit, NeedsConfig, Transient, Unchanged)
-from .inks import (BLACK, INKS, PALETTE, RED, WHITE, YELLOW, InkError, blob_id, check_inks, check_png,  # noqa: E402
-                   encode_png, pack_rows, to_indexed)
+from .inks import (BLACK, GREYS, INK_SETS, INKS, PALETTE, RED, WHITE, YELLOW, InkError, blob_id,  # noqa: E402
+                   check_inks, check_png, encode_png, grey, pack_rows, snap_g16, to_indexed)
 from .jobs import JOBS, execute, job, main, run_in_child  # noqa: E402
 from .output import Card, atomic_write  # noqa: E402
 from .serve import route  # noqa: E402
@@ -78,7 +87,8 @@ def secret(name, optional=False, ctx=None):
 
 
 __all__ = [
-    "BLACK", "WHITE", "YELLOW", "RED", "INKS", "PALETTE", "Card", "Context", "Surface", "JOBS",
+    "BLACK", "WHITE", "YELLOW", "RED", "INKS", "PALETTE", "GREYS", "INK_SETS", "Card", "Context",
+    "Device", "Surface", "JOBS", "grey", "snap_g16",
     "EXIT_OK", "EXIT_UNCHANGED", "EXIT_TRANSIENT", "EXIT_NEEDS_CONFIG", "EXIT_CONTRACT",
     "ContractError", "InkError", "JobExit", "NeedsConfig", "Transient", "Unchanged",
     "atomic_write", "blob_id", "check_inks", "check_png", "encode_png", "execute", "font", "job",

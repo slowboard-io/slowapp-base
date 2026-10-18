@@ -109,11 +109,16 @@ def snapshot_hash(ctx):
     for name in sorted(ctx._fetched):
         h.update(f"{name}={ctx._fetched[name]}\n".encode())
     h.update(json.dumps(ctx.settings, sort_keys=True).encode())
+    if ctx.device:
+        # Contract 5: each device's run draws its own feeds, so the same upstream data is new to it.
+        h.update(f"device={ctx.device.id}\n".encode())
     return h.hexdigest()
 
 
 def _hash_path(ctx):
-    return snapshot_dir(ctx) / f".{ctx.job}.hash"
+    # One per device (contract 5), so the board's run doesn't make the sleep screen's look unchanged.
+    dev = f".{ctx.device.id}" if ctx.device else ""
+    return snapshot_dir(ctx) / f".{ctx.job}{dev}.hash"
 
 
 def exit_if_unchanged(ctx):

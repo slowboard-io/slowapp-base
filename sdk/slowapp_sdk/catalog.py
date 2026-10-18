@@ -51,7 +51,7 @@ FULL_LAYOUT = {"strip_h": STRIP_H, "spare_key": SPARE, "prompt_slot": FULL,
                "slots": [{"id": FULL, "x0": 0, "x1": PANEL_W - 1, "key": KEYS[FULL]}]}
 CENTRE_SLACK = 8                # slowd centres a body up to this much narrower than its slot
 INK_NAMES = {(0, 0, 0): "black", (255, 255, 255): "white", (255, 255, 0): "yellow", (255, 0, 0): "red"}
-INK_ORDER = ("black", "white", "yellow", "red")
+INK_ORDER = ("black", "white", "yellow", "red", "grey")   # grey: any g16 level between black and white
 MAX_UI_GZIP = 512 * 1024        # the registry's rule for a UI bundle (the hub serves up to 2 MB)
 
 
@@ -59,13 +59,29 @@ def sha256(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def save_png(img, path):
-    """A screen as the panel sees it: 2-bit indexed, the palette exactly the inks (small, stable bytes)."""
-    to_indexed(img).save(path, "PNG", bits=2, optimize=False)
+def ink_set(surface):
+    return surface.rsplit(".", 1)[-1]
 
 
-def inks(img):
-    used = {INK_NAMES.get(c) for _, c in img.getcolors(1 << 16)}
+def save_png(img, path, ink_set="k4"):
+    """A screen as its glass sees it: k4 2-bit indexed, the palette exactly the inks; g16 (contract
+    5) 8-bit grey on the sixteen levels. Small, stable bytes either way."""
+    if ink_set == "g16":
+        Path(path).write_bytes(encode_png(img, "g16"))
+    else:
+        to_indexed(img).save(path, "PNG", bits=2, optimize=False)
+
+
+def inks(img, ink_set="k4"):
+    """The inks a screen uses. Only a g16 screen has greys; any other colour is an error."""
+    used = set()
+    for _, c in img.convert("RGB").getcolors(1 << 16):
+        name = INK_NAMES.get(c)
+        if name is None and ink_set == "g16" and c[0] == c[1] == c[2] and c[0] % 17 == 0:
+            name = "grey"
+        if name is None:
+            raise ValueError(f"colour {c} isn't a {ink_set} ink")
+        used.add(name)
     return [i for i in INK_ORDER if i in used]
 
 
@@ -254,13 +270,13 @@ def cmd_build(a):
                     rel = f"screens/{ex['name']}/{surface}/{f}/{safe_file(c['id'])}~{n}.png"
                 names.add(rel)
                 (out_dir / rel).parent.mkdir(parents=True, exist_ok=True)
-                save_png(img, out_dir / rel)
+                save_png(img, out_dir / rel, ink_set(surface))
                 if r.get("prompts"):
                     kind = "ask" if c["id"].endswith(".ask") else "answer"
                 else:
                     kind = c.get("kind", "detail")
                 s = {"example": ex["name"], "feed": f, "surface": surface, "card": c["id"], "kind": kind,
-                     "title": c["title"], "file": rel, "sha256": sha256(out_dir / rel), "inks": inks(img)}
+                     "title": c["title"], "file": rel, "sha256": sha256(out_dir / rel), "inks": inks(img, ink_set(surface))}
                 if kind == "answer":
                     s["binding"] = ".".join(c["id"].rsplit(".", 2)[-2:])
                 screens.append(s)
@@ -387,8 +403,11 @@ def cmd_build(a):
 
 def frames(out_dir, ex, res, prompts, comp):
     """The full-panel pictures of one example: its home cards with their strips, and, if it asks
-    a question, the first prompt on its slot."""
+    a question, the first prompt on its slot. None for an example with no board feed (contract 5:
+    only feeds for other glass, such as a sleep screen's strip)."""
     placed = place(res)
+    if not placed:
+        return []
     full = FULL in placed.values()
     layout = FULL_LAYOUT if full else None
     slots = {}
@@ -575,7 +594,8 @@ def check(out_dir):
     for e in cat["examples"]:
         for fr in e.get("frames", []):
             file_ok(fr["file"], fr["sha256"], f"{e['name']} {fr['kind']} picture")
-        if "error" not in e and not e.get("frames"):
+        board = any(ink_set(s) == "k4" and f != "prompts" for f, s in e["feeds"].items())
+        if "error" not in e and board and not e.get("frames"):
             errs.append(f"example {e['name']}: no full-panel picture")
     # Exhaustive: every example that has a feed shows it at every size the feed supports.
     have = {(s["example"], s["feed"], s["surface"]) for s in cat["screens"]}
