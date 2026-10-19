@@ -87,6 +87,14 @@ jobs:
               assert os.environ.get(v) == "1", f"{v}={os.environ.get(v)!r}"
           print("sci ok, numpy", numpy.__version__)'
 
+      # Contract 6: a render job runs in an empty network namespace. That needs root with
+      # CAP_SYS_ADMIN, as a Fly Machine's root has; SLOWAPP_TEST_NETNS=1 makes the fallback a failure.
+      - name: slowapp-remote without the network, and sealed (inside the image, CAP_SYS_ADMIN)
+        run: |
+          docker run --rm --cap-add SYS_ADMIN -v "$PWD:/src:ro" -w /src/kit/tests \
+            -e PYTHONPATH=/opt/slowapp:/src/kit/tests -e SLOWAPP_TEST_NETNS=1 slowapp-python:dev \
+            python3 -m unittest -v test_remote.Network test_remote.Sealed test_seal
+
       - name: Example UI bundle in the image
         run: |
           id=$(docker create slowapp-example:dev)

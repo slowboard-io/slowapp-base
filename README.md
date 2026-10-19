@@ -16,8 +16,8 @@ contract's design live in [epaper-dashboard](https://github.com/mike-anderson/ep
   runs both kinds of app stores the slim layers once.
 - **Platforms:** `linux/arm/v7` (the Lyra), `linux/arm64`, `linux/amd64`. The libraries come from
   Debian's packages, because PyPI has few 32-bit ARM wheels.
-- **Contract:** label `org.slowboard.contract=4`, and `SLOWAPP_CONTRACT=4` in the environment
-  (the hub sets each job's to its own app's). The kit runs contract 3 and 4 apps.
+- **Contract:** label `org.slowboard.contract=6`, and `SLOWAPP_CONTRACT=6` in the environment
+  (the hub sets each job's to its own app's). The kit runs contract 3 to 6 apps.
 
 ### Versions
 
@@ -27,7 +27,8 @@ no `latest`.
 - **Patch:** a rebuild or a fix. The monthly `rebuild` workflow cuts one, so Debian security
   updates land without anyone remembering to.
 - **Minor:** something added to the kit or SDK, or a new library in an image.
-- **Major:** a contract change (a new `contract` number in the manifest).
+- **Major:** a contract change that breaks apps written to an older one. A new `contract` number
+  that keeps the older ones working (4, 5 and 6 did) is a minor release.
 
 Apps pin a tag and a digest in their Dockerfile, and Dependabot opens the bump PR:
 
