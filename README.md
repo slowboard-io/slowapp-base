@@ -89,6 +89,7 @@ secret and reading the panel's picture start no container; `jobs.run` runs one o
 | [`@slowboard/app-react`](js/app-react) | `<AppProvider>` and hooks: `useDoc`, `useSettings`, `useSecrets`, `useJob`, `useRuns`, `useTheme`. |
 | [`@slowboard/ui`](js/ui) | React components in the hub's look (slowboard.io's tokens and fonts): `Card`, `Button`, `Field`, `TextInput`, `Toggle`, `Segmented`, `List`, `KeyCap`, `Notice`… |
 | [`@slowboard/dev`](js/dev) | The Vite plugin (one self-contained `index.html`, refused over 2 MB) and `slowapp dev`. |
+| [`@slowboard/elements`](js/elements) | The app sheet as custom elements (`<slowapp-sheet>` and its parts) from a catalog bundle, shared by slowboard.io and the hub. |
 
 [`example/ui`](example/ui) is the template (the moon app's UI: a setting, a doc the card draws,
 and a job called with an argument):
@@ -121,7 +122,7 @@ kit/slowapp_kit/               the app side of the contract: context, output che
 kit/bin/slowapp-remote         the wrapper's command, /usr/local/bin in the images
 sdk/slowapp_sdk/               `python3 -m slowapp_sdk validate|fixture|catalog`, the manifest and catalog schemas
 example/                       the moon app, the images' smoke test (the template repo's twin); example/ui its UI
-js/                            @slowboard/app, app-react, ui and dev (npm workspaces; package.json at the root)
+js/                            @slowboard/app, app-react, ui, dev and elements (npm workspaces; package.json at the root)
 fonts/                         baked into the images at /opt/slowapp/fonts (licences alongside)
 ```
 

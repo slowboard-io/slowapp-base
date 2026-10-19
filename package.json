@@ -1,10 +1,18 @@
 {
   "name": "slowapp-base-js",
   "private": true,
-  "description": "The JavaScript side of slowapp-base: @slowboard/app (the bridge), app-react (hooks), ui (components on the Slowboard tokens) and dev (the Vite plugin and `slowapp dev`). example/ui is the template UI.",
-  "workspaces": ["js/app", "js/app-react", "js/ui", "js/dev", "example/ui"],
+  "description": "The JavaScript side of slowapp-base: @slowboard/app (the bridge), app-react (hooks), ui (components on the Slowboard tokens), dev (the Vite plugin and `slowapp dev`) and elements (the app sheet as custom elements, for slowboard.io and the hub). example/ui is the template UI.",
+  "workspaces": [
+    "js/app",
+    "js/app-react",
+    "js/ui",
+    "js/dev",
+    "js/elements",
+    "example/ui"
+  ],
   "scripts": {
     "test": "node --test js/*/test/*.test.js",
+    "build": "npm run build -w js/elements",
     "build:example": "npm run build -w example/ui"
   }
 }

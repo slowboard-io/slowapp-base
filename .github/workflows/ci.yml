@@ -38,6 +38,7 @@ jobs:
           npm ci
           npm test
           npm run build:example
+          npm run build
 
       # A real S3 API for slowapp-remote's presigned-link test (kit/tests/test_remote.py, S3Links):
       # versitygw checks SigV4 signatures as S3 and Tigris do. A step, not a service: it needs args.

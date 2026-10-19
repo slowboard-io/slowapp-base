@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- The hub's own policy: nothing inline, nothing from elsewhere. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'">
+<title>@slowboard/elements demo</title>
+<link rel="stylesheet" href="../../ui/tokens.css">
+<link rel="stylesheet" href="demo.css">
+<script type="module" src="demo.js"></script>
+</head>
+<body>
+<!-- The moon example's catalog bundle (test/moon), straight from `slowapp catalog build`. -->
+<slowapp-sheet id="moon" base="../test/moon/" no="004" ink-filter></slowapp-sheet>
+<!-- What a hub has without a bundle: the manifest's words, grants and feeds. -->
+<slowapp-sheet id="partial">
+<script type="application/json">{"catalog": {"app": {"id": "weather", "title": "Weather", "version": "0.1.8", "author": "mike-anderson", "ink": "yellow",
+ "about": "The day's temperature curve, five days ahead, sunrise and the moon, plus a weather map."},
+ "grants": {"network": "egress", "memory": "256m", "secrets": [], "optional_secrets": [], "prompts": false, "ui": false, "backend": false, "imports": [], "exports": [], "events": []},
+ "feeds": [{"name": "home", "size": "slot", "ink_sets": ["k4"]}, {"name": "sleep", "size": "1284x340", "ink_sets": ["g16"]}]}}</script>
+</slowapp-sheet>
+</body>
+</html>
