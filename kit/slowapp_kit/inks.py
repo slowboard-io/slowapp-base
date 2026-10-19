@@ -46,7 +46,12 @@ def snap_g16(img, dither=False):
 def check_inks(img, inks="k4"):
     """Raise InkError unless every pixel is one of the ink set's colours."""
     allowed = set(INK_SETS[inks])
-    used = {c for _, c in img.convert("RGB").getcolors(maxcolors=1 << 24)}
+    # PIL sizes its table by maxcolors: ask for just past the inks, not 2^24 (hundreds of MB,
+    # a MemoryError on a small run machine). More colours than that can't all be inks.
+    counts = img.convert("RGB").getcolors(maxcolors=len(allowed) + 1)
+    if counts is None:
+        raise InkError(f"more than {len(allowed)} colours, so some are not {inks} inks")
+    used = {c for _, c in counts}
     stray = used - allowed
     if stray:
         raise InkError(f"{len(stray)} colours are not inks, e.g. {sorted(stray)[:4]}")
