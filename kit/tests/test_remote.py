@@ -8,23 +8,29 @@ SLOWAPP_TEST_S3 names one, with links signed by a stdlib SigV4 presigner.
 import gzip
 import hashlib
 import hmac
+import http.client
 import io
 import json
 import os
+import signal
+import ssl
 import subprocess
 import sys
 import tarfile
 import tempfile
 import threading
 import unittest
+import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from unittest import mock
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from slowapp_kit import remote
+from slowapp_kit import jobs, remote
+from slowapp_kit.errors import ContractError
 
 HERE = Path(__file__).resolve().parent
 APP = [sys.executable, str(HERE / "sample_app.py")]
@@ -57,12 +63,13 @@ def link(name, kind):
 
 class Store(ThreadingHTTPServer):
     """Objects by path. GET: 200 or 404. PUT: stores the body. `fail` answers a path, or a
-    (method, path), with an error."""
+    (method, path), with an error; `garble` answers a GET with a broken response ("status": not
+    HTTP at all, "short": less body than its Content-Length)."""
     daemon_threads = True
 
     def __init__(self):
         super().__init__(("127.0.0.1", 0), Handler)
-        self.objects, self.types, self.fail, self.chunked, self.hits = {}, {}, {}, [], {}
+        self.objects, self.types, self.fail, self.chunked, self.hits, self.garble = {}, {}, {}, [], {}, {}
         threading.Thread(target=self.serve_forever, daemon=True).start()
 
     def url(self, path):
@@ -86,6 +93,18 @@ class Handler(BaseHTTPRequestHandler):
         p = self._path()
         if self._fail(p):
             return self.send_error(self._fail(p))
+        how = self.server.garble.get(p)
+        if how == "status":
+            self.wfile.write(b"garbage\r\n\r\n")
+            self.close_connection = True
+            return
+        if how == "short":
+            self.send_response(200)
+            self.send_header("Content-Length", "1000")
+            self.end_headers()
+            self.wfile.write(b"x" * 10)
+            self.close_connection = True
+            return
         body = self.server.objects.get(p)
         if body is None:
             return self.send_error(404)
@@ -118,7 +137,7 @@ class Remote(unittest.TestCase):
 
     def setUp(self):
         s = self.store
-        s.objects.clear(), s.types.clear(), s.fail.clear(), s.chunked.clear(), s.hits.clear()
+        s.objects.clear(), s.types.clear(), s.fail.clear(), s.chunked.clear(), s.hits.clear(), s.garble.clear()
         self.tmp = Path(tempfile.mkdtemp())
         self.settings({})
 
@@ -349,6 +368,175 @@ class Remote(unittest.TestCase):
         tail = log.tail()
         self.assertEqual(len(tail), remote.LOG_TAIL)
         self.assertTrue(tail.endswith(b"slowapp-remote: the end\n"))
+
+
+    # ------------------------------------------------------------------ review fixes
+
+    def test_broken_http_responses_are_retried_then_exit_4(self):
+        for how, err in (("status", "BadStatusLine"), ("short", "IncompleteRead")):
+            with self.subTest(how):
+                self.store.hits.clear()
+                self.store.garble["runs/r1/in.tar"] = how
+                self.assertEqual(self.run_remote(), 4, self.stdout)
+                self.assertEqual(self.store.hits[("GET", "runs/r1/in.tar")], remote.ATTEMPTS, "retried")
+                rep = self.report()
+                self.assertIsNone(rep["job_exit"])
+                self.assertIn(err, rep["error"])
+                self.assertNotIn("Traceback", self.stdout)
+                self.assertIn("runs/r1/log", self.store.objects)
+
+    def test_data_put_alone_never_overwrites(self):
+        saved = tar_bytes({"count.txt": b"7"}, gz=True)
+        self.store.objects["data/test/b1.tar.gz"] = saved
+        self.assertEqual(self.run_remote(SLOWAPP_REMOTE_DATA_GET=None), 0, self.stdout)
+        self.assertEqual(self.store.objects["data/test/b1.tar.gz"], saved)
+        self.assertNotIn(("PUT", "data/test/b1.tar.gz"), self.store.hits)
+        self.assertEqual(self.report()["data"], {"status": "none"})
+        self.assertIn("DATA_PUT without DATA_GET or DATA_NEW=1", self.log())
+
+    def test_data_new_starts_empty_and_saves(self):
+        self.assertEqual(self.run_remote(SLOWAPP_REMOTE_DATA_GET=None, SLOWAPP_REMOTE_DATA_NEW="1"), 0, self.stdout)
+        self.assertNotIn(("GET", "data/test/b1.tar.gz"), self.store.hits)
+        self.assertEqual(self.data()["count.txt"], b"1")
+        rep = self.report()
+        self.assertEqual((rep["data"]["status"], rep["data"]["loaded"]), ("saved", False))
+
+    def test_data_get_403_is_not_missing(self):
+        self.store.fail[("GET", "data/test/b1.tar.gz")] = 403
+        self.assertEqual(self.run_remote(SLOWAPP_REMOTE_DATA_NEW="1"), 4, "the GET decides when it's sent")
+        self.assertNotIn(("PUT", "data/test/b1.tar.gz"), self.store.hits)
+
+    def test_timeout_zero_or_less_is_no_limit(self):
+        for raw in ("0", "-1", "inf", ""):
+            with self.subTest(raw=raw):
+                self.assertEqual(self.run_remote(SLOWAPP_REMOTE_TIMEOUT_S=raw), 0, self.stdout)
+                self.assertEqual(self.report()["job_exit"], 0)
+        self.assertEqual(remote._child_timeout({"SLOWAPP_REMOTE_TIMEOUT_S": " 2.5 "}), 2.5)
+
+    def test_unparsable_timeout_exits_64(self):
+        for raw in ("soon", "nan"):
+            with self.subTest(raw=raw):
+                self.assertEqual(self.run_remote(SLOWAPP_REMOTE_TIMEOUT_S=raw), 64, self.stdout)
+                rep = self.report()
+                self.assertIsNone(rep["job_exit"])
+                self.assertIn("SLOWAPP_REMOTE_TIMEOUT_S", rep["error"])
+        self.assertNotIn(("GET", "runs/r1/in.tar"), self.store.hits, "checked before any fetch")
+
+    def test_job_that_wont_start(self):
+        self.store.objects["data/test/b1.tar.gz"] = tar_bytes({"count.txt": b"7"}, gz=True)
+        cmd = [sys.executable, "-m", "slowapp_kit.remote"]
+        self.assertEqual(self.run_remote(cmd=cmd, SLOWAPP_ENTRYPOINT='["/nonexistent/app"]'), 64, self.stdout)
+        rep = self.report()
+        self.assertIsNone(rep["job_exit"])
+        self.assertEqual(rep["exit_code"], 64)
+        self.assertIn("couldn't start the job", rep["error"])
+        self.assertEqual(rep["data"]["status"], "none")
+        self.assertNotIn(("PUT", "data/test/b1.tar.gz"), self.store.hits)
+
+    def stopped(self, sig, **kw):
+        """Run the sleeping job, send the wrapper sig once the job is asleep, return its exit."""
+        self.settings(dict({"sleep": 30}, **kw.pop("settings", {})))
+        p = subprocess.Popen(APP + ["slowapp-remote", "job", "remote"], env=self.env(**kw),
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        seen = b""
+        while b"remote job: sleeping" not in seen:
+            line = p.stdout.readline()
+            self.assertTrue(line, seen.decode())
+            seen += line
+        p.send_signal(sig)
+        seen += p.communicate(timeout=30)[0]
+        self.stdout = seen.decode()
+        return p.returncode
+
+    def test_sigterm_stops_the_job_and_still_uploads(self):
+        self.assertEqual(self.stopped(signal.SIGTERM), 143, self.stdout)
+        rep = self.report()
+        self.assertEqual((rep["exit_code"], rep["job_exit"]), (143, 143))
+        self.assertEqual(rep["error"], "stopped by SIGTERM")
+        self.assertEqual(rep["data"]["status"], "saved", "what the job left in /data is kept")
+        self.assertEqual(self.data()["count.txt"], b"1")
+        self.assertIn("slowapp-remote: exit 143", self.log())
+
+    def test_sigint_kills_a_job_that_ignores_sigterm(self):
+        code = self.stopped(signal.SIGINT, settings={"ignore_term": True}, SLOWAPP_REMOTE_STOP_GRACE_S="0.5")
+        self.assertEqual(code, 130, self.stdout)
+        rep = self.report()
+        self.assertEqual((rep["exit_code"], rep["job_exit"]), (130, 137))
+        self.assertEqual(rep["error"], "stopped by SIGINT")
+        self.assertIn("slowapp-remote: exit 130", self.log())
+
+    def test_pack_writes_hard_links_as_files(self):
+        src = self.tmp / "src"
+        (src / "a").mkdir(parents=True)
+        (src / "a" / "f").write_text("same")
+        os.link(src / "a" / "f", src / "g")
+        os.link(src / "a" / "f", src / "a" / "h")
+        remote.pack(src, self.tmp / "p.tar", remote.Log(io.BytesIO()))
+        with tarfile.open(self.tmp / "p.tar") as tf:
+            members = tf.getmembers()
+        self.assertEqual([m.name for m in members], ["a", "g", "a/f", "a/h"], "sorted, each dir's own first")
+        for m in members[1:]:
+            self.assertEqual((m.type, m.linkname, m.size), (tarfile.REGTYPE, "", 4), m.name)
+        out = untar((self.tmp / "p.tar").read_bytes())
+        self.assertEqual(out, {"g": b"same", "a/f": b"same", "a/h": b"same"})
+
+    def test_bad_entrypoint_exits_64_on_both_paths(self):
+        standalone = [sys.executable, "-m", "slowapp_kit.remote"]
+        for raw in ("not json", '"python3"', "[]", "[1]", '[""]', '{"a": 1}'):
+            for cmd in (standalone, APP + ["slowapp-remote"]):
+                with self.subTest(raw=raw, cmd=cmd[-1]):
+                    self.assertEqual(self.run_remote(cmd=cmd, SLOWAPP_ENTRYPOINT=raw), 64, self.stdout)
+                    self.assertNotIn("Traceback", self.stdout)
+                    rep = self.report()
+                    self.assertIsNone(rep["job_exit"])
+                    self.assertIn("SLOWAPP_ENTRYPOINT must be a non-empty JSON list", rep["error"])
+
+    def test_jobs_entrypoint_shares_the_parser(self):
+        with mock.patch.dict(os.environ, {"SLOWAPP_ENTRYPOINT": '["python3", "-m", "moon"]'}):
+            self.assertEqual(jobs.entrypoint(), ["python3", "-m", "moon"])
+        with mock.patch.dict(os.environ, {"SLOWAPP_ENTRYPOINT": "[1]"}):
+            with self.assertRaises(ContractError):
+                jobs.entrypoint()
+            code, msg = jobs.run_in_child("remote")
+            self.assertEqual(code, 64)
+            self.assertIn("SLOWAPP_ENTRYPOINT", msg)
+
+    def test_permanent_errors_are_not_retried(self):
+        log = remote.Log(io.BytesIO())
+        permanent = [FileNotFoundError(2, "no such file"), PermissionError(13, "denied"), ValueError("bad"),
+                     urllib.error.URLError("unknown url type: ftpx"),
+                     urllib.error.URLError(ssl.SSLCertVerificationError(1, "certificate verify failed")),
+                     urllib.error.URLError(FileNotFoundError(2, "no such file"))]
+        transient = [ConnectionRefusedError(), TimeoutError(), urllib.error.URLError(ConnectionResetError()),
+                     urllib.error.URLError(ssl.SSLError(1, "handshake")), http.client.IncompleteRead(b""),
+                     http.client.BadStatusLine("x")]
+        with mock.patch.object(remote, "RETRY_S", 0):
+            for e in permanent + transient:
+                with self.subTest(e=repr(e)):
+                    calls = []
+
+                    def fn():
+                        calls.append(1)
+                        raise e
+                    with self.assertRaises(type(e)):
+                        remote._attempts("x", log, fn)
+                    self.assertEqual(len(calls), 1 if e in permanent else remote.ATTEMPTS)
+            # a local file that can't be written: one try
+            with self.assertRaises(FileNotFoundError):
+                remote.get(self.store.url("runs/r1/in.tar"), self.tmp / "no" / "in.tar", "in.tar", log)
+        self.assertEqual(self.store.hits[("GET", "runs/r1/in.tar")], 1)
+        self.assertEqual(self.run_remote(SLOWAPP_REMOTE_IN="ftpx://example/in.tar"), 4)
+        self.assertNotIn("retry", self.log())
+        self.assertIn("unknown url type", self.report()["error"])
+
+    def test_put_bytes_sends_the_bytes(self):
+        with mock.patch.object(remote.tempfile, "mkstemp", side_effect=AssertionError("no temp file")):
+            n = remote.put_bytes(self.store.url("runs/r1/log"), b"hello", "log", "log upload",
+                                 remote.Log(io.BytesIO()))
+        self.assertEqual(n, 5)
+        self.assertEqual(self.store.objects["runs/r1/log"], b"hello")
+        self.assertEqual(self.store.types["runs/r1/log"], "text/plain; charset=utf-8")
+        self.assertEqual(self.store.chunked, [])
 
     # ------------------------------------------------------------------ the standalone command
 

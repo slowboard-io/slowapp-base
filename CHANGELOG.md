@@ -13,4 +13,17 @@ release notes.
   an input fetch failed or an upload did. Standard library only. On PATH as
   `/usr/local/bin/slowapp-remote`, and every kit app takes it as its own command. The contract is
   MANIFEST.md, "Remote runs".
+  - The hub decides whether saved `/data` exists: `SLOWAPP_REMOTE_DATA_GET` when it does,
+    `SLOWAPP_REMOTE_DATA_NEW=1` (and no GET) when it doesn't. `/data` is uploaded only after one of
+    the two, so a `DATA_PUT` alone can't put an empty `/data` over saved data; a 403 on the GET
+    fails the run like any other error, a 404 still starts empty.
+  - SIGTERM or SIGINT stops the job child (SIGTERM, SIGKILL 3 s later), still uploads, and exits
+    143 or 130.
+  - `SLOWAPP_REMOTE_TIMEOUT_S` of 0 or less means no limit; one that isn't a number exits 64, as
+    does a `SLOWAPP_ENTRYPOINT` that isn't a non-empty JSON list of strings (on both the kit's and
+    the standalone path) and a job command that can't be started (`job_exit` null, `/data` not
+    uploaded).
+  - Broken HTTP responses (a bad status line, a body cut short) are retried like network errors;
+    local file errors, unusable links and certificate failures aren't. Hard-linked files go into
+    the tars as regular files.
 - CI runs the wrapper against a real S3 API (versitygw) with SigV4-presigned links.

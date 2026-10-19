@@ -54,7 +54,11 @@ def remote(ctx):
         (ctx.data / "big.bin").write_bytes(b"x" * (s["big_kb"] * 1024))
     (ctx.cache / "scratch").write_text("cache")
     if s.get("sleep"):
+        import signal
         import time
+        if s.get("ignore_term"):
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        print("remote job: sleeping", flush=True)
         time.sleep(s["sleep"])
     img = Image.new("RGB", (452, 444), WHITE)
     ctx.write_feed("left", [Card("home", img, "Hi")])
