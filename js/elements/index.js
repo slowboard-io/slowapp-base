@@ -34,11 +34,11 @@ const FILTERS = `<svg class="filters" width="0" height="0" aria-hidden="true" fo
   + `<filter id="slowapp-ink-light" color-interpolation-filters="sRGB"><feColorMatrix type="matrix" values="0.81569 0.11765 0.00000 0 0.06667  -0.04314 0.84706 0.12941 0 0.06667  -0.06667 0.00000 1.00000 0 0.06667  0 0 0 1 0"/></filter>`
   + `<filter id="slowapp-ink-dark" color-interpolation-filters="sRGB"><feColorMatrix type="matrix" values="-0.06275 0.11765 -0.92157 0 0.94510  -0.91765 0.84706 -0.79216 0 0.94118  -0.92549 0.00000 0.07843 0 0.92549  0 0 0 1 0"/></filter></svg>`;
 
-const DATA_KEYS = ["catalog", "cards", "touches", "links", "crumb", "note"];
+const DATA_KEYS = ["catalog", "cards", "touches", "links", "crumb", "note", "titles"];
 
 /**
  * The shared base: data from properties, or from a child <script type="application/json">
- * (a bundle, or {catalog, cards, touches, links, crumb, note}); attributes base, no, theme,
+ * (a bundle, or {catalog, cards, touches, links, crumb, note, titles}); attributes base, no, theme,
  * ink-filter. Renders into an open shadow root, adopting a server-rendered one if it's there.
  */
 class SlowappElement extends HTMLElementBase {

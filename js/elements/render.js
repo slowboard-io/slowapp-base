@@ -70,6 +70,7 @@ const join = (xs) => xs.filter(Boolean).join(", ");
  *   touches  {internet, secrets, memory}: words to show instead of the ones made from the grants
  *   links    [{href, label, tone}] (tone "black" | "red" | "yellow" | "plain"); default: the repo
  *   crumb    {href, label}: a link above the disk (the site's "‹ Slowapps")
+ *   titles   {appId: title}: other apps' titles, for the imports and exports lines
  *   note     a line under the deck; default: "Demo card, drawn in the app's style." when a card is
  *            synthetic, else the shown example's caption
  */
@@ -101,25 +102,31 @@ export function sheetModel(input = {}) {
 
   const also = [];
   if (g) {
-    if (g.prompts) also.push("Asks questions on the panel, answered with a key");
+    // "calendar:agenda" -> "Calendar's agenda" when the host gives the app's title.
+    const titles = opts.titles || {};
+    const named = (x) => {
+      const [a, n] = String(x).split(":");
+      return titles[a] ? (n ? `${titles[a]}'s ${n}` : titles[a]) : String(x);
+    };
+    if (g.prompts) also.push("Asks you questions on the panel; you answer with a key on the board");
     if (g.ui) also.push("Has its own page in your hub");
-    if (g.backend) also.push("Runs a small server while its page is open");
-    if (g.data_mb) also.push(`Keeps up to ${g.data_mb} MB between runs`);
-    if (g.cache_mb) also.push(`Caches up to ${g.cache_mb} MB in memory`);
-    if (g.imports?.length) also.push(`Reads ${join(g.imports)}`);
-    if (g.exports?.length) also.push(`Shares ${join(g.exports)}`);
-    if (g.events?.length) also.push(`Listens for ${join(g.events)}`);
+    if (g.backend) also.push("Runs while its page is open");
+    if (g.data_mb) also.push(`Keeps up to ${g.data_mb} MB of its own data`);
+    if (g.imports?.length) also.push(`Reads ${join(g.imports.map(named))} from other apps`);
+    if (g.exports?.length) also.push(`Shares ${join(g.exports.map(named))} with other apps`);
+    if (g.events?.length) also.push(`Notices when ${join(g.events.map(named))}`);
   }
 
   const facts = [];
   const version = app.version || cat.release?.version;
   if (version) facts.push({ label: "Version", value: version });
   if (app.license) facts.push({ label: "Licence", value: app.license });
-  for (const f of cat.feeds || []) facts.push({ label: `Feed ${f.name}`, value: feedLine(f), sizes: feedSizes(f), inks: feedInks(f) });
-  for (const [plat, p] of Object.entries(cat.image?.platforms || {})) {
-    const adds = p.adds_download != null && p.adds_download !== p.download ? `, ${bytes(p.adds_download)} on a hub with its base` : "";
-    facts.push({ label: `Download ${plat.replace(/^linux\//, "")}`, value: `${bytes(p.download)}${adds}` });
-  }
+  for (const f of cat.feeds || []) facts.push({ label: feedLabel(f), value: feedLine(f), sizes: feedSizes(f), inks: feedInks(f) });
+  // One download size, no platform names: amd64's, else the largest.
+  const plats = cat.image?.platforms || {};
+  const dl = Object.entries(plats).find(([k]) => k.endsWith("/amd64"))?.[1]
+    ?? Object.values(plats).sort((a, b) => (b.download || 0) - (a.download || 0))[0];
+  if (dl && typeof dl.download === "number") facts.push({ label: "Download", value: bytes(dl.download) });
 
   const links = Array.isArray(opts.links) ? opts.links
     : app.repo ? [{ href: app.repo, label: "Source on GitHub", tone: "black" }] : [];
@@ -170,10 +177,18 @@ function screenDecks(cat, title, src) {
   return decks;
 }
 
+const cap = (s) => String(s).charAt(0).toUpperCase() + String(s).slice(1);
+
+/** "Left card" for a slot feed, "Sleep picture" for a fixed-size one. */
+function feedLabel(f) {
+  return `${cap(f.name)} ${f.size === "slot" ? "card" : "picture"}`;
+}
+
+/** Where the feed goes: any third, or a fixed size after a noun ("the sleep band, 1284×340"). */
 function feedLine(f) {
-  const size = f.size === "slot" ? "any slot" : (surface(`${f.size}.k4`)?.label.replace(" grey", "") || f.size);
-  const sets = f.ink_sets?.length ? ` (${f.ink_sets.join(", ")})` : "";
-  return `${size}${sets}`;
+  if (f.size === "slot") return "any third of the panel";
+  const dims = surface(`${f.size}.k4`)?.label || f.size;
+  return f.name === "sleep" ? `the sleep band, ${dims}` : `a fixed picture, ${dims}`;
 }
 
 function feedSizes(f) {
@@ -239,7 +254,7 @@ export function renderGrants(m) {
 export function renderFacts(m) {
   if (!m.facts.length) return "";
   const inks = (xs) => xs.length ? ` <span class="inks" aria-label="Inks: ${esc(xs.join(", "))}">${xs.map((i) => `<i class="ink ink--${i}" title="${i}"></i>`).join("")}</span>` : "";
-  const sizes = (xs) => xs.length ? `<ul class="sizelist">${xs.map((s) => `<li${s.ok ? "" : ' class="no"'}>${esc(s.label)}${s.ok ? "" : `: ${esc(s.error ? `not shown (${s.error})` : "not shown")}`}</li>`).join("")}</ul>` : "";
+  const sizes = (xs) => xs.length ? `<ul class="sizelist">${xs.map((s) => s.ok ? `<li>${esc(s.label)}</li>` : `<li class="no"${s.error ? ` title="${esc(s.error)}"` : ""}>${esc(s.label)}: no card at this size</li>`).join("")}</ul>` : "";
   return `<dl class="facts" part="facts">${m.facts.map((f) =>
     `<div><dt>${esc(f.label)}</dt><dd>${esc(f.value)}${inks(f.inks || [])}${sizes(f.sizes || [])}</dd></div>`).join("")}</dl>`;
 }
@@ -258,7 +273,7 @@ export function renderSheet(m, { head = true } = {}) {
   const facts = renderFacts(m);
   const about = (m.about ? `<p class="lede">${esc(m.about)}</p>` : "")
     + (grants ? `<h2 class="h3">What it may touch</h2>${grants}` : "")
-    + (facts ? `<h2 class="h3">The details</h2>${facts}` : "")
+    + (facts ? `<h2 class="h3">Sizes and inks</h2>${facts}` : "")
     + (m.links.length ? `<div class="actions" part="actions">${m.links.map((l) =>
       `<a class="btn${l.tone ? ` btn--${l.tone}` : ""}" href="${esc(l.href)}" part="button">${esc(l.label)}</a>`).join("")}</div>` : "");
   return `${headHtml}<section class="body${screens ? "" : " body--words"}" part="body">`

@@ -47,8 +47,8 @@ test("a bundle becomes a deck per size, the whole panel, and the grants in words
   assert.equal(m.note, "7 Oct 2026: a waning crescent, new moon on the 10th");
   assert.deepEqual(m.touches, { internet: "No", secrets: "None", memory: "48 MB" });
   assert.deepEqual(m.links, [{ href: "https://github.com/mike-anderson/slowapp-example", label: "Source on GitHub", tone: "black" }]);
-  const feed = m.facts.find((f) => f.label === "Feed phase");
-  assert.equal(feed.value, "any slot");
+  const feed = m.facts.find((f) => f.label === "Phase card");
+  assert.equal(feed.value, "any third of the panel");
   assert.deepEqual(feed.inks, ["black", "white", "yellow", "red"]);
   assert.deepEqual(feed.sizes.map((s) => [s.label, s.ok]), [["452×444", true], ["456×444", true], ["1360×444", true]]);
   // A bare bundle is the same input.
@@ -66,7 +66,7 @@ test("the sheet's HTML: head, picker, decks, grants, details, links; nothing a C
   assert.match(html, /loading="lazy"/, "the hidden sizes load when shown");
   assert.equal((html.match(/data-tap/g) || []).length, 3, "Next card on every deck with two cards or more (one whole-panel frame)");
   assert.match(html, /<dt>Memory<\/dt><dd>48 MB<\/dd>/);
-  assert.match(html, /<h2 class="h3">The details<\/h2>/);
+  assert.match(html, /<h2 class="h3">Sizes and inks<\/h2>/);
   assert.match(html, /<a class="btn btn--black" href="https:\/\/github.com\/mike-anderson\/slowapp-example" part="button">Source on GitHub<\/a>/);
   assert.doesNotMatch(renderSheet(sheetModel(moon), { head: false }), /class="head"/);
 });
@@ -87,7 +87,7 @@ test("the site's input: its own cards, words and links, and no details it doesn'
   assert.match(html, /<img src="\/panel\/ask.png" alt="Question card" width="452" height="480" data-card part="screen">/);
   assert.doesNotMatch(html, /data-tap|data-size/, "one card: no Next card, one size: no picker");
   assert.match(html, /<p class="note">Demo card, drawn in the app&#39;s style.<\/p>/);
-  assert.doesNotMatch(html, /The details/);
+  assert.doesNotMatch(html, /Sizes and inks/);
   assert.match(html, /<a class="btn" href="\/docs\/slowapps#publishing-and-installing" part="button">Add it to your hub<\/a>/);
 });
 
@@ -99,12 +99,30 @@ test("what a host has without a bundle: words and grants, feeds with their sizes
   } });
   assert.equal(m.decks.length, 0);
   assert.deepEqual(m.touches, { internet: "Yes, outgoing only", secrets: "key, extra (optional)", memory: "256 MB" });
-  assert.deepEqual(m.also, ["Asks questions on the panel, answered with a key"]);
-  assert.deepEqual(m.facts.map((f) => [f.label, f.value]), [["Version", "0.1.8"], ["Feed home", "any slot (k4)"], ["Feed sleep", "1284×340 (g16)"]]);
+  assert.deepEqual(m.also, ["Asks you questions on the panel; you answer with a key on the board"]);
+  assert.deepEqual(m.facts.map((f) => [f.label, f.value]), [["Version", "0.1.8"], ["Home card", "any third of the panel"], ["Sleep picture", "the sleep band, 1284×340"]]);
   assert.deepEqual(m.facts[2].inks, ["black", "white", "grey"]);
   const html = renderSheet(m);
   assert.match(html, /<section class="body body--words" part="body"><div class="about"/, "no screens column");
   assert.match(html, /<p>v0.1.8<\/p>/);
+});
+
+test("the other grants and the details in words: titles for other apps, one download, failed sizes", () => {
+  const m = sheetModel({ titles: { calendar: "Calendar" }, catalog: {
+    app: { title: "Weather" },
+    grants: { network: "none", memory: "64m", prompts: false, ui: true, backend: true, data_mb: 8, cache_mb: 8,
+      imports: ["calendar:agenda"], exports: ["weather:today"], events: ["answer"] },
+    feeds: [{ name: "map", size: "456x444", surfaces: { "452x444.k4": { ok: true }, "1360x444.k4": { ok: false, error: "too wide" } }, inks: ["black", "red"] }],
+    image: { platforms: { "linux/arm/v7": { download: 9e7 }, "linux/amd64": { download: 1.2e8, adds_download: 1e6 } } },
+  } });
+  assert.deepEqual(m.also, ["Has its own page in your hub", "Runs while its page is open", "Keeps up to 8 MB of its own data",
+    "Reads Calendar's agenda from other apps", "Shares weather:today with other apps", "Notices when answer"]);
+  assert.deepEqual(m.facts.map((f) => [f.label, f.value]), [["Map picture", "a fixed picture, 456×444"], ["Download", "120 MB"]]);
+  const html = renderSheet(m);
+  assert.match(html, /<li class="no" title="too wide">1360×444: no card at this size<\/li>/);
+  assert.doesNotMatch(html, /amd64|arm|Caches|k4\)|g16\)/);
+  assert.equal(sheetModel({ catalog: { app: {}, image: { platforms: { "linux/arm64": { download: 5e6 }, "linux/arm/v7": { download: 6e6 } } } } })
+    .facts.find((f) => f.label === "Download").value, "6.0 MB", "no amd64: the largest");
 });
 
 test("text from a bundle is escaped and only http(s) or relative URLs get through", () => {

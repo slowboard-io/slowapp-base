@@ -18,7 +18,7 @@ export interface Touches { internet: string; secrets: string; memory: string }
 export interface Link { href: string; label: string; tone?: "black" | "red" | "yellow" | "plain" }
 export interface SheetInput {
   catalog?: Catalog; base?: string; no?: string; cards?: Card[]; touches?: Touches; links?: Link[];
-  crumb?: { href: string; label: string }; note?: string;
+  crumb?: { href: string; label: string }; note?: string; titles?: Record<string, string>;
 }
 export interface SheetModel {
   id: string; title: string; no: string; author: string; version: string; ink: string; about: string;
@@ -47,7 +47,7 @@ export declare function stylesheet(): CSSStyleSheet | null;
 export declare function define(registry?: CustomElementRegistry): void;
 
 declare class SlowappElement extends HTMLElement {
-  catalog?: Catalog; cards?: Card[]; touches?: Touches; links?: Link[]; crumb?: { href: string; label: string }; note?: string;
+  catalog?: Catalog; cards?: Card[]; touches?: Touches; links?: Link[]; crumb?: { href: string; label: string }; note?: string; titles?: Record<string, string>;
   readonly model: SheetModel;
   render(): void;
 }

@@ -30,14 +30,15 @@ el.catalog = await (await fetch("/catalog/moon/catalog.json")).json();
 | `<slowapp-sheet>` | All of it: head (crumb, disk, title, `SLOW no · by author`), screens, about, grants, details, links |
 | `<slowapp-screens>` | A deck per size, a size picker when there are several, "Next card" |
 | `<slowapp-grants>` | What it may touch (internet, secrets, memory) and the other grants, one line each |
-| `<slowapp-facts>` | Version, licence, each feed's sizes (unsupported ones with the reason) and inks, download per platform |
+| `<slowapp-facts>` | Sizes and inks: version, licence, each feed's sizes (one it has no card at says so; the reason is its tooltip) and inks, one download size |
 | `<slowapp-disk>` | The disk; attributes `name`, `ink`, `no`, `size` (`tile` or `feature`) |
 
 **Data** (properties, or one child `<script type="application/json">` holding a bare bundle or an
 object with these keys): `catalog` (the bundle; `app` alone is enough), `cards` (`[{src, alt,
 synthetic}]`, a deck instead of the bundle's screens), `touches` (`{internet, secrets, memory}`,
 words instead of the ones made from the grants), `links` (`[{href, label, tone}]`; default: the
-repo), `crumb` (`{href, label}`), `note` (the line under the deck; default: the example's caption,
+repo), `crumb` (`{href, label}`), `titles` (`{appId: title}`, other apps' names for the
+imports and exports lines), `note` (the line under the deck; default: the example's caption,
 or "Demo card…" when a card is synthetic). Setting a property re-renders.
 
 **Attributes**: `base` (the URL the bundle's `screens/…` paths are relative to), `no` (shelf
