@@ -26,6 +26,20 @@ this repo). Contracts 3 to 5 keep working unchanged.
   `/in/artifacts/<name>/`, or in fixture mode from the fixture's `artifacts/`. What it reads counts
   towards `exit_if_unchanged`. `ctx.kind` and `slowapp_kit.manifest.job_spec` say what a job is
   granted.
+- **`slowapp-remote`: no network for render.** A job that should have no network (a contract 6
+  render job, a sync job with `network = "none"`, any job of an older app whose network is none,
+  or `SLOWAPP_REMOTE_NETWORK=none`) runs in an empty network namespace (`os.unshare`, only `lo`)
+  once its inputs are fetched. It needs root with `CAP_SYS_ADMIN`, as on a Fly Machine; elsewhere
+  the wrapper logs a `WARNING:` line and runs it with the network, and `.remote.json` says so
+  (`network.isolated`). Contract 5 apps such as weather keep their network.
+- **`slowapp-remote`: sealed runs.** With `SLOWAPP_REMOTE_KEY_FILE` (read, then deleted before
+  anything runs), `in.tar` and the saved `/data` are opened and `out.tar`, `data.tar.gz` and the
+  log are sealed: ChaCha20-Poly1305 in 64 KiB STREAM chunks from the libcrypto Python already links
+  (ctypes; the images gain no package), format in MANIFEST.md, "Sealed runs". An optional
+  `data_key` seals `/data` across runs. A sealed run keeps the job's output out of the machine's
+  log. Without the variable, nothing changes.
+- **Images:** `SLOWAPP_CONTRACT=6` and the label `org.slowboard.contract=6` (it said 4, and the
+  description "contracts 3 and 4"); the build checks that sealing works on each platform.
 
 ## 1.4.1
 

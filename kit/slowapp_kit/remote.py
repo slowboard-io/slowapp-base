@@ -12,15 +12,25 @@ The wrapper fetches in.tar (and the board's saved data.tar.gz), runs the job as 
 SLOWAPP_IN/OUT/STATE/CACHE pointed at local directories, then always tries to upload out.tar (with
 the kit's .metrics.json and the wrapper's .remote.json), the new /data and the log tail.
 
+Contract 6 adds two things. A job that should have no network (a render job, or any job of an
+app whose network is none) runs in an empty network namespace, after the wrapper has fetched its
+inputs. And with SLOWAPP_REMOTE_KEY_FILE, every object is sealed with a per-run key (seal.py): the
+wrapper reads the key, deletes the file before the job starts, opens in.tar and the saved data,
+and seals out.tar, data.tar.gz and the log.
+
 Standard library only: the base images gain no dependency.
 """
+import base64
+import fcntl
 import http.client
 import json
 import math
 import os
 import shutil
 import signal
+import socket
 import ssl
+import struct
 import subprocess
 import sys
 import tarfile
@@ -33,6 +43,8 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
+from . import manifest as mf
+from . import seal
 from .errors import EXIT_CONTRACT, EXIT_TRANSIENT, ContractError
 
 LOG_TAIL = 64 * 1024
@@ -42,7 +54,8 @@ ATTEMPTS = 3
 RETRY_S = float(os.environ.get("SLOWAPP_REMOTE_RETRY_S", "2"))
 # Seconds between SIGTERM and SIGKILL for the job child when the machine is stopped.
 STOP_GRACE_S = float(os.environ.get("SLOWAPP_REMOTE_STOP_GRACE_S", "3"))
-TYPES = {"out": "application/x-tar", "data": "application/gzip", "log": "text/plain; charset=utf-8"}
+TYPES = {"out": "application/x-tar", "data": "application/gzip", "log": "text/plain; charset=utf-8",
+         "sealed": "application/octet-stream"}
 
 
 class Unsafe(Exception):
@@ -57,14 +70,18 @@ class Log:
         self.stream = stream or sys.stdout.buffer
         self.buf = bytearray()
         self.lock = threading.Lock()
+        # A sealed run keeps the job's own output out of the machine's log (only the sealed log
+        # upload has it); the wrapper's lines still go to both.
+        self.echo_job = True
 
-    def write(self, b):
+    def write(self, b, echo=True):
         with self.lock:
-            try:
-                self.stream.write(b)
-                self.stream.flush()
-            except (OSError, ValueError):
-                pass
+            if echo:
+                try:
+                    self.stream.write(b)
+                    self.stream.flush()
+                except (OSError, ValueError):
+                    pass
             self.buf += b
             if len(self.buf) > LOG_TAIL:
                 del self.buf[:len(self.buf) - LOG_TAIL]
@@ -243,16 +260,129 @@ def pack(root, path, log, gz=False):
                     tf.addfile(ti, f)
 
 
+# ------------------------------------------------------------------ sealing (contract 6)
+
+def read_keys(env):
+    """SLOWAPP_REMOTE_KEY_FILE: the run's key, read and then deleted, so the job can't read it.
+    The file is the key in base64 (32 bytes), or JSON {"key": base64, "data_key": base64}, where
+    data_key (default: key) seals the saved /data both ways, so the hub can keep one per board and
+    never re-seal it. Returns {"key", "data"} or None when the variable is unset. ContractError if
+    the file can't be read or deleted, isn't a key, or there's nothing to seal with."""
+    path = env.get("SLOWAPP_REMOTE_KEY_FILE")
+    if not path:
+        return None
+    try:
+        raw = Path(path).read_bytes()
+    except OSError as e:
+        raise ContractError(f"SLOWAPP_REMOTE_KEY_FILE: {e}")
+    try:
+        os.unlink(path)
+    except OSError as e:
+        raise ContractError(f"SLOWAPP_REMOTE_KEY_FILE: can't delete it before the job runs ({e})")
+
+    def key(v, what):
+        try:
+            k = base64.b64decode(v, validate=True)
+        except (ValueError, TypeError):
+            k = b""
+        if len(k) != seal.KEY:
+            raise ContractError(f"SLOWAPP_REMOTE_KEY_FILE: {what} isn't {seal.KEY} bytes in base64")
+        return k
+    text = raw.strip()
+    if text.startswith(b"{"):
+        try:
+            obj = json.loads(text)
+        except ValueError:
+            obj = None
+        if not isinstance(obj, dict) or "key" not in obj:
+            raise ContractError('SLOWAPP_REMOTE_KEY_FILE: JSON must be {"key": …, "data_key": …}')
+        keys = {"key": key(obj["key"], "key")}
+        keys["data"] = key(obj["data_key"], "data_key") if obj.get("data_key") else keys["key"]
+    else:
+        keys = {"key": key(text, "the key")}
+        keys["data"] = keys["key"]
+    try:
+        seal.aead()
+    except seal.SealError as e:
+        raise ContractError(str(e))
+    return keys
+
+
+# ------------------------------------------------------------------ no network (contract 6)
+
+def _load_manifest(env):
+    try:
+        with open(env.get("SLOWAPP_MANIFEST", "/app/slowapp.toml"), "rb") as f:
+            return tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError):
+        return {}
+
+
+def network_wanted(env, name, manifest):
+    """"none" when the job must run without the network: a contract 6 render job, any job of an
+    app whose network is none, or SLOWAPP_REMOTE_NETWORK=none (the hub's word; "egress" there
+    never loosens the manifest). "egress" otherwise, and when there's no manifest to go by."""
+    raw = env.get("SLOWAPP_REMOTE_NETWORK") or ""
+    if raw not in ("", "none", "egress"):
+        raise ContractError(f"SLOWAPP_REMOTE_NETWORK={raw!r}: none or egress")
+    if raw == "none":
+        return "none"
+    if manifest and mf.job_spec(manifest, name)["network"] == "none":
+        return "none"
+    return "egress"
+
+
+SIOCGIFFLAGS, SIOCSIFFLAGS, IFF_UP = 0x8913, 0x8914, 0x1
+
+
+def _loopback_up():
+    """Bring lo up in a new network namespace (as Podman's --network none has it): the job may
+    talk to itself, and nothing else."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        ifr = fcntl.ioctl(s, SIOCGIFFLAGS, struct.pack("16sH22s", b"lo", 0, b""))
+        flags = struct.unpack("16sH", ifr[:18])[1]
+        fcntl.ioctl(s, SIOCSIFFLAGS, struct.pack("16sH22s", b"lo", flags | IFF_UP, b""))
+    finally:
+        s.close()
+
+
+def _enter_empty_netns():
+    """preexec_fn of the job child: a network namespace of its own, with only lo."""
+    os.unshare(os.CLONE_NEWNET)
+    try:
+        _loopback_up()
+    except OSError:
+        pass
+
+
+def netns_unavailable():
+    """None if this process can give a child an empty network namespace (root with
+    CAP_SYS_ADMIN, as on a Fly Machine), else why not. Tried in a forked child, which exits at once."""
+    if not hasattr(os, "unshare") or not hasattr(os, "CLONE_NEWNET"):
+        return "this system has no network namespaces (os.unshare needs Linux and Python 3.12)"
+    pid = os.fork()
+    if pid == 0:                                    # pragma: no cover - the child
+        try:
+            os.unshare(os.CLONE_NEWNET)
+            os._exit(0)
+        except OSError as e:
+            os._exit(e.errno if 0 < e.errno < 256 else 255)
+        except BaseException:
+            os._exit(255)
+    _, status = os.waitpid(pid, 0)
+    code = os.waitstatus_to_exitcode(status)
+    if code == 0:
+        return None
+    return f"unshare(CLONE_NEWNET): {os.strerror(code) if 0 < code < 255 else 'failed'}"
+
+
 # ------------------------------------------------------------------ the run
 
 def _data_cap(env):
     raw = env.get("SLOWAPP_REMOTE_DATA_MAX_MB")
     if raw is None:
-        try:
-            with open(env.get("SLOWAPP_MANIFEST", "/app/slowapp.toml"), "rb") as f:
-                raw = tomllib.load(f).get("app", {}).get("data", {}).get("max_mb")
-        except (OSError, tomllib.TOMLDecodeError):
-            raw = None
+        raw = _load_manifest(env).get("app", {}).get("data", {}).get("max_mb")
     try:
         return None if raw is None else float(raw) * 1024 * 1024
     except ValueError:
@@ -321,14 +451,18 @@ class Stop:
         return signal.Signals(self.signum).name
 
 
-def run_child(cmd, env, log, timeout, stop=None):
+def run_child(cmd, env, log, timeout, stop=None, isolate=False):
     """The job as a child: stdout and stderr together, into the log as they come. Returns its exit
-    code (128 + signal if killed; 137 if it ran past timeout). stop: a Stop to hand the child to."""
+    code (128 + signal if killed; 137 if it ran past timeout). stop: a Stop to hand the child to.
+    isolate: run it in an empty network namespace (OSError if that fails: it doesn't run)."""
     # Looked up first: under qemu-user a missing program comes back as exit 127, not an OSError.
     if shutil.which(cmd[0], path=env.get("PATH", os.defpath)) is None:
         raise FileNotFoundError(f"no such program: {cmd[0]}")
-    p = subprocess.Popen(cmd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                         stderr=subprocess.STDOUT)
+    try:
+        p = subprocess.Popen(cmd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT, preexec_fn=_enter_empty_netns if isolate else None)
+    except subprocess.SubprocessError as e:
+        raise OSError(f"couldn't give the job an empty network namespace: {e}")
     if stop is not None:
         stop.child = p
         if stop.signum is not None:                 # stopped while it was starting
@@ -336,7 +470,7 @@ def run_child(cmd, env, log, timeout, stop=None):
 
     def pump():
         while chunk := os.read(p.stdout.fileno(), 1 << 16):
-            log.write(chunk)
+            log.write(chunk, echo=log.echo_job)
     t = threading.Thread(target=pump, daemon=True)
     t.start()
     try:
@@ -349,6 +483,35 @@ def run_child(cmd, env, log, timeout, stop=None):
         return 137
     t.join(5)
     return p.returncode if p.returncode >= 0 else 128 - p.returncode
+
+
+def fetch(url, dest, what, log, key=None, label=None, missing_ok=False):
+    """get(), and with a key, open the sealed object into dest. Unsafe if it doesn't open."""
+    if key is None:
+        return get(url, dest, what, log, missing_ok)
+    sealed = Path(f"{dest}.sealed")
+    try:
+        if not get(url, sealed, what, log, missing_ok):
+            return False
+        try:
+            seal.open_file(key, label, sealed, dest)
+        except seal.SealError as e:
+            raise Unsafe(f"{what} doesn't open with the run's key ({e})")
+    finally:
+        sealed.unlink(missing_ok=True)
+    return True
+
+
+def upload(url, src, kind, what, log, key=None, label=None):
+    """put(), and with a key, the sealed file instead (application/octet-stream)."""
+    if key is None:
+        return put(url, src, kind, what, log)
+    sealed = Path(f"{src}.sealed")
+    try:
+        seal.seal_file(key, label, src, sealed)
+        return put(url, sealed, "sealed", what, log)
+    finally:
+        sealed.unlink(missing_ok=True)
 
 
 def run(argv, entry=None, env=None, log=None):
@@ -371,14 +534,31 @@ def _run(argv, entry, env, log, stop):
         d.mkdir()
     report = {"job": name, "run_id": env.get("SLOWAPP_RUN_ID"), "job_exit": None, "exit_code": None,
               "duration_ms": 0, "started_at": None, "ended_at": None, "error": None,
-              "data": {"status": "none"}, "uploads_failed": []}
+              "data": {"status": "none"}, "uploads_failed": [], "sealed": False,
+              "network": {"wanted": "egress", "isolated": False, "error": None}}
     code = None
     # /data goes back only if the board's saved one arrived, or the hub said there's none yet:
     # never an empty /data over saved data the wrapper didn't see.
     data_known = False
+    keys = {}
 
     # 1. inputs
     try:
+        # First of all: the key file is gone before anything else can run.
+        try:
+            keys = read_keys(env) or {}
+        finally:
+            if env.get("SLOWAPP_REMOTE_KEY_FILE"):          # also when it wasn't a key
+                try:
+                    Path(env["SLOWAPP_REMOTE_KEY_FILE"]).unlink(missing_ok=True)
+                except OSError:
+                    pass
+        if keys:
+            report["sealed"] = True
+            log.echo_job = False
+            log.say(f"sealed run: objects open and seal with the run's key ({seal.aead().name}); "
+                    "the job's output goes only to the sealed log")
+        report["network"]["wanted"] = network_wanted(env, name, _load_manifest(env))
         if entry is None and env.get("SLOWAPP_ENTRYPOINT"):
             entry = parse_entrypoint(env["SLOWAPP_ENTRYPOINT"])
         if not entry:
@@ -386,11 +566,11 @@ def _run(argv, entry, env, log, stop):
         timeout = _child_timeout(env)
         if not links["in"] or not links["out"]:
             raise ContractError("SLOWAPP_REMOTE_IN and SLOWAPP_REMOTE_OUT are required")
-        get(links["in"], work / "in.tar", "in.tar", log)
+        fetch(links["in"], work / "in.tar", "in.tar", log, keys.get("key"), "in")
         n = unpack(work / "in.tar", dirs["in"])
         log.say(f"in.tar: {n} entries")
         if links["data_get"]:
-            if get(links["data_get"], work / "data.tar.gz", "data", log, missing_ok=True):
+            if fetch(links["data_get"], work / "data.tar.gz", "data", log, keys.get("data"), "data", missing_ok=True):
                 n = unpack(work / "data.tar.gz", dirs["data"])
                 log.say(f"data: {n} entries")
                 report["data"]["loaded"] = True
@@ -418,7 +598,17 @@ def _run(argv, entry, env, log, stop):
         code, report["error"] = 128 + stop.signum, f"stopped by {stop.name()} before the job ran"
         log.say(report["error"])
 
-    # 2. the job
+    # 2. the job, without the network if it should have none
+    isolate = False
+    if code is None and report["network"]["wanted"] == "none":
+        why = netns_unavailable()
+        if why is None:
+            isolate = report["network"]["isolated"] = True
+            log.say(f"job {name}: no network (an empty network namespace)")
+        else:
+            report["network"]["error"] = why
+            log.say(f"WARNING: job {name} should run without the network, but {why}. "
+                    "It runs WITH the network (.remote.json network.isolated is false)")
     if code is None:
         child_env = {k: v for k, v in env.items() if not k.startswith("SLOWAPP_REMOTE_")}
         child_env.update(SLOWAPP_IN=str(dirs["in"]), SLOWAPP_OUT=str(dirs["out"]),
@@ -427,7 +617,7 @@ def _run(argv, entry, env, log, stop):
         report["started_at"] = _iso(started)
         log.say(f"job {name}: {' '.join(entry)} job {name}")
         try:
-            code = report["job_exit"] = run_child(list(entry) + ["job", name], child_env, log, timeout, stop)
+            code = report["job_exit"] = run_child(list(entry) + ["job", name], child_env, log, timeout, stop, isolate)
         except OSError as e:                        # it never ran: job_exit stays null
             code = EXIT_CONTRACT
             report["error"] = f"couldn't start the job: {e}"
@@ -455,10 +645,10 @@ def _run(argv, entry, env, log, stop):
         else:
             try:
                 pack(dirs["data"], work / "data.tar.gz", log, gz=True)
-                put(links["data_put"], work / "data.tar.gz", "data", "data upload", log)
+                upload(links["data_put"], work / "data.tar.gz", "data", "data upload", log, keys.get("data"), "data")
                 report["data"]["status"] = "saved"
                 log.say(f"data: saved ({size} bytes)")
-            except (*NET_ERRORS, tarfile.TarError) as e:
+            except (*NET_ERRORS, tarfile.TarError, seal.SealError) as e:
                 report["data"]["status"] = "failed"
                 report["uploads_failed"].append("data")
                 log.say(f"data upload failed: {_why(e)}")
@@ -472,9 +662,9 @@ def _run(argv, entry, env, log, stop):
         try:
             (dirs["out"] / ".remote.json").write_text(json.dumps(report, indent=1))
             pack(dirs["out"], work / "out.tar", log)
-            size = put(links["out"], work / "out.tar", "out", "out.tar upload", log)
+            size = upload(links["out"], work / "out.tar", "out", "out.tar upload", log, keys.get("key"), "out")
             log.say(f"out.tar: uploaded ({size} bytes)")
-        except (*NET_ERRORS, tarfile.TarError) as e:
+        except (*NET_ERRORS, tarfile.TarError, seal.SealError) as e:
             log.say(f"out.tar upload failed: {_why(e)}")
             report["uploads_failed"].append("out")
             if report["job_exit"] is not None and stop.signum is None:
@@ -489,8 +679,11 @@ def _run(argv, entry, env, log, stop):
     # in the machine's own log: out.tar already says how the run went.
     if links["log"]:
         try:
-            put_bytes(links["log"], log.tail(), "log", "log upload", log)
-        except NET_ERRORS as e:
+            if keys:
+                put_bytes(links["log"], seal.seal_bytes(keys["key"], "log", log.tail()), "sealed", "log upload", log)
+            else:
+                put_bytes(links["log"], log.tail(), "log", "log upload", log)
+        except (*NET_ERRORS, seal.SealError) as e:
             log.say(f"log upload failed: {_why(e)}")
     shutil.rmtree(work, ignore_errors=True)
     return final

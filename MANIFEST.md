@@ -313,6 +313,8 @@ The cloud hub runs each job on a throwaway Fly Machine made from the app's image
   | `SLOWAPP_REMOTE_DATA_PUT` | if `data` | Presigned PUT of the new `data.tar.gz`, used only when `/data` came through `DATA_GET` or `DATA_NEW=1` was set. A `DATA_PUT` with neither isn't used (the log says so, `data.status` is `"none"`), so an empty `/data` never replaces saved data. All three are left out when the app declares no `data`. |
   | `SLOWAPP_REMOTE_DATA_MAX_MB` | optional | The manifest's `data.max_mb` (read from `/app/slowapp.toml` if unset). `/data` over it isn't uploaded: the old one stays. |
   | `SLOWAPP_REMOTE_TIMEOUT_S` | optional | Kill the job child after this many seconds (exit 137) so the uploads still happen; set it a little under the machine's own stop. Unset, empty, 0 or less: no limit. Not a number: exit 64. |
+  | `SLOWAPP_REMOTE_KEY_FILE` | optional (1.5.0) | A file holding the run's sealing keys (below, "Sealed runs"). The wrapper reads it and deletes it before anything else, so the job never can. Unset: nothing is sealed, as before. |
+  | `SLOWAPP_REMOTE_NETWORK` | optional (1.5.0) | `none`: run the job without the network whatever the manifest says (the hub's own reading of it). `egress` never loosens the manifest. Anything else: exit 64. |
 
   The job child gets none of the `SLOWAPP_REMOTE_*` variables. Its `SLOWAPP_IN`, `SLOWAPP_OUT`,
   `SLOWAPP_STATE` and `SLOWAPP_CACHE` point at fresh local directories (`/cache` starts empty and
@@ -320,7 +322,8 @@ The cloud hub runs each job on a throwaway Fly Machine made from the app's image
   into, not a kill time.
 - **Requests:** GETs follow redirects; PUTs send `Content-Length` (never chunked) and
   `Content-Type` `application/x-tar` (out), `application/gzip` (data) or `text/plain;
-  charset=utf-8` (log), so sign only `host` or sign those. Each request has a 60 s timeout and is
+  charset=utf-8` (log), or `application/octet-stream` for each in a sealed run, so sign only
+  `host` or sign those. Each request has a 60 s timeout and is
   tried 3 times (2 s, then 4 s apart) on a network error (a broken or cut-short response
   included), 408, 429 or 5xx. Other 4xx, a link urllib can't use, a certificate that doesn't
   verify and a local file error aren't retried.
@@ -329,6 +332,16 @@ The cloud hub runs each job on a throwaway Fly Machine made from the app's image
   tarfile's `data` filter extracts it. `out.tar` and `data.tar.gz` hold directories and regular
   files under relative names; a symlink or special file the job made is left out and said in the
   log, and a file with several hard links goes in once per name, each a whole regular file.
+- **No network for the job** (1.5.0): a job that should have none runs in an empty network
+  namespace (only `lo`, up; no route) once the wrapper has fetched its inputs; the wrapper keeps
+  the network for its uploads. That's a contract 6 render job (any job without `kind = "sync"`), a
+  sync job whose network is `none`, any job of a contract 3 to 5 app whose `network` is `none`, or
+  any job with `SLOWAPP_REMOTE_NETWORK=none`. The manifest is the image's own
+  (`SLOWAPP_MANIFEST`, default `/app/slowapp.toml`); with none to read, the job keeps the network
+  as before. It needs root with `CAP_SYS_ADMIN`, which a Fly Machine's root has (Docker needs
+  `--cap-add SYS_ADMIN` or `--privileged`). Where it can't, the wrapper logs a line starting
+  `WARNING: job <name> should run without the network` and runs the job with the network:
+  `.remote.json`'s `network` says so (`isolated` false, `error` why), for the hub to act on.
 - **Order:** fetch `in.tar` and the data, run the job, then always try to upload: `/data` (every
   run the job ran, whatever its exit, as a board keeps `/data`; never when the inputs failed, so a
   failed fetch can't wipe the saved data), then `out.tar` with the kit's `.metrics.json` and
@@ -339,15 +352,52 @@ The cloud hub runs each job on a throwaway Fly Machine made from the app's image
   during the input fetches means the job doesn't run. Give the machine a kill timeout long enough
   for the uploads.
 - **`.remote.json`** (in `out.tar`): `{"job", "run_id", "job_exit", "exit_code", "duration_ms",
-  "started_at", "ended_at", "error", "data", "uploads_failed"}`. `job_exit` is the job's own code
+  "started_at", "ended_at", "error", "data", "uploads_failed", "sealed", "network"}`. `job_exit` is the job's own code
   (`null` if it never ran: an input failed, the command was bad, it couldn't be started), `exit_code` what the machine exits with, times are UTC RFC 3339,
   `data` is `{"status": "none" | "saved" | "over_cap" | "failed", "loaded", "bytes", "max_mb"}`
-  and `uploads_failed` lists `"data"` (and in the log, `"out"`).
+  and `uploads_failed` lists `"data"` (and in the log, `"out"`). `sealed` is whether the run's
+  objects were sealed; `network` is `{"wanted": "none" | "egress", "isolated", "error"}`.
 - **Exit codes:** the job's own (0, 3, 4, 5, 64, 137, …), except **4** when an input fetch failed
-  or an input archive was refused (the job didn't run), **4** when the job ran but `/data` or
+  or an input archive was refused (the job didn't run; a sealed one that doesn't open included), **4** when the job ran but `/data` or
   `out.tar` didn't upload (the log and `.remote.json` say which), **64** for a bad command
-  (`SLOWAPP_ENTRYPOINT` included, or one that couldn't be started), a bad `SLOWAPP_REMOTE_TIMEOUT_S`
-  or missing links, and **143** / **130** when the machine was stopped (SIGTERM / SIGINT). A failed log upload changes nothing: it shows in the machine's own log.
+  (`SLOWAPP_ENTRYPOINT` included, or one that couldn't be started), a bad `SLOWAPP_REMOTE_TIMEOUT_S`,
+  `SLOWAPP_REMOTE_NETWORK` or key file, nothing to seal with, missing links, and **143** / **130** when the machine was stopped (SIGTERM / SIGINT). A failed log upload changes nothing: it shows in the machine's own log.
+
+### Sealed runs (1.5.0)
+
+With `SLOWAPP_REMOTE_KEY_FILE`, the store only ever holds ciphertext. The hub makes a key per run,
+seals `in.tar` with it, and hands the key to the machine as a file (Fly `config.files`, never an
+environment variable). The wrapper reads the file and deletes it before it fetches anything, opens
+`in.tar` and the saved `/data` with it, and seals `out.tar`, `data.tar.gz` and the log. The job
+child sees neither the key nor the file. A sealed run also keeps the job's own output out of the
+machine's log: it goes only into the sealed log upload, and the machine's log has the wrapper's
+`slowapp-remote:` lines.
+
+- **Key file:** the key, 32 bytes in base64; or JSON `{"key": "<base64>", "data_key": "<base64>"}`.
+  `data_key` (default: `key`) seals the saved `/data` both ways, so the hub can keep one per board
+  or install and never has to open and re-seal `/data` between runs. A file that can't be read or
+  deleted, or isn't a key, exits 64; so does a machine with nothing to seal with. Then `out.tar`
+  and the log go up unsealed, holding only the wrapper's report (the job didn't run).
+- **Cipher:** ChaCha20-Poly1305 (RFC 8439), from the libcrypto Python links, through ctypes; the
+  `cryptography` package if that can't be loaded. The base images check it at build.
+- **Format** (every object; `label` is `in`, `out`, `data` or `log`, so one can't stand in for
+  another):
+
+  ```
+  header   = "SBSEAL1\n" || salt                         8 + 24 random bytes
+  subkey   = HMAC-SHA256(key, "slowapp-remote seal 1" || 0x00 || label || 0x00 || salt)
+  chunk i  = ChaCha20-Poly1305(subkey, nonce_i, plaintext[i·65536 … (i+1)·65536], aad = header)
+             (ciphertext then the 16-byte tag)
+  nonce_i  = i as 11 bytes big-endian || 0x01 for the last chunk, 0x00 before it
+  ```
+
+  Every object has at least one chunk; an empty plaintext is a single empty last chunk. A reader
+  takes 65 552-byte chunks, and the one the object ends with must open as the last, so a cut,
+  reordered or relabelled object doesn't open. `kit/tests/test_seal.py` builds one by hand from
+  this description.
+- **Refusals:** an `in.tar` or saved `/data` that doesn't open is refused like an unsafe archive
+  (exit 4, the job doesn't run, `/data` isn't uploaded). The hub should likewise refuse an
+  `out.tar`, `data.tar.gz` or log that doesn't open with the key it made.
 
 ## Fixture mode
 

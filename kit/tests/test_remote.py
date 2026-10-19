@@ -5,6 +5,7 @@ SLOWAPP_TEST_S3 names one, with links signed by a stdlib SigV4 presigner.
 
   PYTHONPATH=kit python3 -m unittest discover -s kit/tests -p 'test_remote.py'
 """
+import base64
 import gzip
 import hashlib
 import hmac
@@ -29,7 +30,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from slowapp_kit import jobs, remote
+from slowapp_kit import jobs, remote, seal
 from slowapp_kit.errors import ContractError
 
 HERE = Path(__file__).resolve().parent
@@ -126,7 +127,9 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
 
-class Remote(unittest.TestCase):
+class RemoteBase(unittest.TestCase):
+    """The store and the helpers; Remote, Sealed and Network hold the tests."""
+
     @classmethod
     def setUpClass(cls):
         cls.store = Store()
@@ -180,6 +183,9 @@ class Remote(unittest.TestCase):
     def data(self):
         return untar(self.store.objects["data/test/b1.tar.gz"])
 
+
+
+class Remote(RemoteBase):
     # ------------------------------------------------------------------ a run end to end
 
     def test_inputs_in_outputs_back(self):
@@ -552,6 +558,232 @@ class Remote(unittest.TestCase):
         self.assertEqual(remote.run(["serve"], entry=APP, log=remote.Log(io.BytesIO())), 64)
 
 
+# ---------------------------------------------------------------------- sealed runs (contract 6)
+
+def b64(b):
+    return base64.b64encode(b).decode()
+
+
+class Sealed(RemoteBase):
+    """SLOWAPP_REMOTE_KEY_FILE: in.tar and the saved data open with the run's keys; out.tar,
+    data.tar.gz and the log go back sealed; the key file is gone before the job starts."""
+
+    def setUp(self):
+        super().setUp()
+        self.key, self.data_key = os.urandom(32), os.urandom(32)
+        self.seal_in()
+
+    def seal_in(self, key=None, label="in"):
+        o = self.store.objects
+        o["runs/r1/in.tar"] = seal.seal_bytes(key or self.key, label, o["runs/r1/in.tar"])
+
+    def settings(self, settings, files=None):
+        super().settings(settings, files)
+        if hasattr(self, "key"):
+            self.seal_in()
+
+    def run_sealed(self, job="remote", content=None, **kw):
+        self.kf = self.tmp / f"key-{uuid.uuid4().hex[:6]}"
+        self.kf.write_text(content if content is not None else
+                           json.dumps({"key": b64(self.key), "data_key": b64(self.data_key)}))
+        return self.run_remote(job, SLOWAPP_REMOTE_KEY_FILE=str(self.kf), **kw)
+
+    def out(self):
+        return untar(seal.open_bytes(self.key, "out", self.store.objects["runs/r1/out.tar"]))
+
+    def log(self):
+        return seal.open_bytes(self.key, "log", self.store.objects["runs/r1/log"]).decode()
+
+    def data(self):
+        return untar(seal.open_bytes(self.data_key, "data", self.store.objects["data/test/b1.tar.gz"]))
+
+    def test_a_sealed_run(self):
+        self.settings({"hello": "there"})
+        self.assertEqual(self.run_sealed(), 0, self.stdout)
+        self.assertFalse(self.kf.exists(), "the key file is deleted before the job runs")
+        seen = json.loads(self.out()["seen.json"])
+        self.assertEqual(seen["settings"], {"hello": "there"})
+        self.assertEqual(seen["remote_env"], [])
+        rep = self.report()
+        self.assertTrue(rep["sealed"])
+        self.assertEqual((rep["exit_code"], rep["data"]["status"]), (0, "saved"))
+        self.assertEqual(self.data()["count.txt"], b"1")
+        s = self.store
+        for k in ("runs/r1/out.tar", "runs/r1/log", "data/test/b1.tar.gz"):
+            self.assertEqual(s.types[k], "application/octet-stream", k)
+            self.assertTrue(s.objects[k].startswith(seal.MAGIC), k)
+            for plain in (b"remote job", b"hello", b"seen.json", b"count.txt"):
+                self.assertNotIn(plain, s.objects[k], f"{plain} in {k}")
+        # The job's output is in the sealed log only; the machine's log has the wrapper's lines.
+        self.assertIn("remote job: to stdout", self.log())
+        self.assertIn("slowapp-remote: exit 0", self.log())
+        self.assertNotIn("remote job:", self.stdout)
+        self.assertIn("slowapp-remote: exit 0", self.stdout)
+        self.assertIn("sealed run", self.stdout)
+
+    def test_sealed_data_carries_over_under_the_data_key(self):
+        self.assertEqual(self.run_sealed(), 0, self.stdout)
+        self.key = os.urandom(32)                   # a new run, a new run key; the same data key
+        self.settings({})
+        self.assertEqual(self.run_sealed(), 0, self.stdout)
+        self.assertEqual(self.data()["count.txt"], b"2")
+        self.assertTrue(self.report()["data"]["loaded"])
+
+    def test_one_key_for_everything(self):
+        self.data_key = self.key
+        self.assertEqual(self.run_sealed(content=b64(self.key) + "\n"), 0, self.stdout)
+        self.assertEqual(self.data()["count.txt"], b"1")
+        self.assertEqual(self.run_sealed(content=b64(self.key)), 0, self.stdout)
+        self.assertEqual(self.data()["count.txt"], b"2")
+
+    def test_an_input_that_doesnt_open_is_refused(self):
+        o = self.store.objects
+        good = o["runs/r1/in.tar"]
+        for why, body in (("tampered", good[:40] + bytes([good[40] ^ 1]) + good[41:]),
+                          ("cut short", good[:-1]),
+                          ("plain", tar_bytes({"settings.json": b"{}"})),
+                          ("another label", seal.seal_bytes(self.key, "out", tar_bytes({"settings.json": b"{}"}))),
+                          ("another key", seal.seal_bytes(os.urandom(32), "in", tar_bytes({"settings.json": b"{}"})))):
+            with self.subTest(why):
+                o["runs/r1/in.tar"] = body
+                self.assertEqual(self.run_sealed(), 4, self.stdout)
+                rep = self.report()
+                self.assertIsNone(rep["job_exit"])
+                self.assertIn("in.tar doesn't open with the run's key", rep["error"])
+                self.assertNotIn("data/test/b1.tar.gz", o, "the job didn't run: /data isn't saved")
+
+    def test_saved_data_that_doesnt_open_is_refused(self):
+        self.assertEqual(self.run_sealed(), 0, self.stdout)
+        o = self.store.objects
+        o["data/test/b1.tar.gz"] = o["data/test/b1.tar.gz"][:-20]
+        self.settings({})
+        self.assertEqual(self.run_sealed(), 4, self.stdout)
+        self.assertIn("data doesn't open", self.report()["error"])
+
+    def test_bad_key_files_exit_64(self):
+        for why, content in (("not base64", "!!!"), ("short", b64(b"x" * 16)),
+                             ("json without key", '{"data_key": "' + b64(self.key) + '"}'),
+                             ("bad data_key", json.dumps({"key": b64(self.key), "data_key": "AAAA"}))):
+            with self.subTest(why):
+                self.assertEqual(self.run_sealed(content=content), 64, self.stdout)
+                self.assertFalse(self.kf.exists())
+                # Nothing to seal with: out.tar holds only the wrapper's report, in the clear.
+                rep = json.loads(untar(self.store.objects["runs/r1/out.tar"])[".remote.json"])
+                self.assertIn("SLOWAPP_REMOTE_KEY_FILE", rep["error"])
+                self.assertIsNone(rep["job_exit"])
+        self.assertEqual(self.run_remote(SLOWAPP_REMOTE_KEY_FILE=str(self.tmp / "nope")), 64)
+
+    def test_read_keys(self):
+        f = self.tmp / "k"
+        f.write_text(json.dumps({"key": b64(self.key)}))
+        self.assertEqual(remote.read_keys({"SLOWAPP_REMOTE_KEY_FILE": str(f)}), {"key": self.key, "data": self.key})
+        self.assertFalse(f.exists())
+        self.assertIsNone(remote.read_keys({}))
+
+
+# ---------------------------------------------------------------------- no network (contract 6)
+
+C6 = """[app]
+id = "test"
+contract = 6
+network = "{app_net}"
+[[job]]
+name = "net"
+{job}
+"""
+
+
+class Network(RemoteBase):
+    """A job that should have no network runs in an empty network namespace, once its inputs are
+    in. Needs Linux and root with CAP_SYS_ADMIN (a Fly Machine; Docker --privileged): elsewhere
+    the wrapper says so loudly and runs it with the network. SLOWAPP_TEST_NETNS=1 makes that a
+    failure (the privileged Docker run)."""
+
+    def manifest(self, text):
+        p = self.tmp / "slowapp.toml"
+        p.write_text(text)
+        return str(p)
+
+    def run_net(self, text, **kw):
+        port = self.store.server_address[1]
+        code = self.run_remote("net", SLOWAPP_MANIFEST=self.manifest(text),
+                               SLOWAPP_TEST_REACH=f"127.0.0.1:{port}", **kw)
+        self.assertEqual(code, 0, self.stdout)
+        return json.loads(self.out()["net.json"]), self.report()["network"]
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        import warnings
+        with warnings.catch_warnings():             # the probe forks; this process has threads
+            warnings.simplefilter("ignore", DeprecationWarning)
+            cls.why = remote.netns_unavailable()
+
+    def assert_isolated(self, net, rep):
+        self.assertEqual(rep["wanted"], "none")
+        if self.why is None:
+            self.assertEqual(rep, {"wanted": "none", "isolated": True, "error": None})
+            # A new namespace: lo, and the kernel's fallback tunnels (gre0, tunl0, …), which are
+            # down. No route anywhere, and the store the wrapper just used is out of reach.
+            self.assertIn("lo", net["ifaces"])
+            self.assertNotIn("eth0", net["ifaces"])
+            self.assertEqual(net["routes"], [], "no IPv4 route")
+            self.assertIsNot(net["reach"], True, "the job reached the store")
+            self.assertIn("no network (an empty network namespace)", self.log())
+        else:
+            if os.environ.get("SLOWAPP_TEST_NETNS") == "1":
+                self.fail(f"SLOWAPP_TEST_NETNS=1, but: {self.why}")
+            self.assertFalse(rep["isolated"])
+            self.assertTrue(rep["error"])
+            self.assertIn("WARNING: job net should run without the network", self.log())
+            self.assertIn("WARNING", self.stdout)
+
+    def test_a_render_job_has_no_network(self):
+        self.assert_isolated(*self.run_net(C6.format(app_net="egress", job="")))
+        # The wrapper's own uploads still went out.
+        self.assertIn("net.json", self.out())
+        self.assertIn(b"slowapp-remote: exit 0", self.store.objects["runs/r1/log"])
+
+    def test_a_sync_job_keeps_its_network(self):
+        net, rep = self.run_net(C6.format(app_net="none", job='kind = "sync"\nnetwork = "egress"'))
+        self.assertEqual(rep, {"wanted": "egress", "isolated": False, "error": None})
+        self.assertIs(net["reach"], True)
+        self.assert_isolated(*self.run_net(C6.format(app_net="egress", job='kind = "sync"\nnetwork = "none"')))
+        self.assert_isolated(*self.run_net(C6.format(app_net="none", job='kind = "sync"')))
+
+    def test_before_contract_6_the_apps_network(self):
+        c5 = C6.replace("contract = 6", "contract = 5")
+        net, rep = self.run_net(c5.format(app_net="egress", job=""))
+        self.assertEqual((rep["wanted"], net["reach"]), ("egress", True), "weather's render keeps the network")
+        self.assert_isolated(*self.run_net(c5.format(app_net="none", job="")))
+        # No manifest to go by: as before contract 6.
+        self.assertEqual(self.run_remote("net", SLOWAPP_TEST_REACH=f"127.0.0.1:{self.store.server_address[1]}"), 0)
+        self.assertEqual(self.report()["network"]["wanted"], "egress")
+
+    def test_the_hub_can_say_none(self):
+        c5 = C6.replace("contract = 6", "contract = 5").format(app_net="egress", job="")
+        self.assert_isolated(*self.run_net(c5, SLOWAPP_REMOTE_NETWORK="none"))
+        net, rep = self.run_net(C6.format(app_net="egress", job=""), SLOWAPP_REMOTE_NETWORK="egress")
+        self.assertEqual(rep["wanted"], "none", "egress from the hub doesn't loosen render")
+        self.assertEqual(self.run_remote("net", SLOWAPP_REMOTE_NETWORK="lan"), 64)
+
+    def test_sealed_and_isolated(self):
+        key = os.urandom(32)
+        o = self.store.objects
+        o["runs/r1/in.tar"] = seal.seal_bytes(key, "in", o["runs/r1/in.tar"])
+        kf = self.tmp / "key"
+        kf.write_text(b64(key))
+        port = self.store.server_address[1]
+        code = self.run_remote("net", SLOWAPP_MANIFEST=self.manifest(C6.format(app_net="egress", job="")),
+                               SLOWAPP_TEST_REACH=f"127.0.0.1:{port}", SLOWAPP_REMOTE_KEY_FILE=str(kf),
+                               SLOWAPP_TEST_KEY_PATH=str(kf))
+        self.assertEqual(code, 0, self.stdout)
+        out = untar(seal.open_bytes(key, "out", o["runs/r1/out.tar"]))
+        net = json.loads(out["net.json"])
+        self.assertEqual((net["key_file"], net["key_file_exists"]), (None, False))
+        self.assertTrue(json.loads(out[".remote.json"])["sealed"])
+
+
 # ---------------------------------------------------------------------- a real S3 API
 
 def presign(method, endpoint, path, access, secret, region="us-east-1", expires=900):
@@ -616,6 +848,27 @@ class S3Links(unittest.TestCase):
             self.assertEqual(untar(self.req("GET", f"/{self.bucket}/data/test/b1.tar.gz"))["count.txt"],
                              str(n).encode(), "the first run's GET is S3's 404: start empty")
             self.assertIn(b"slowapp-remote: exit 0", self.req("GET", f"/{self.bucket}/runs/r1/log"))
+
+    def test_a_sealed_run_through_s3(self):
+        key = os.urandom(32)
+        self.req("PUT", f"/{self.bucket}/runs/r1/in.tar", seal.seal_bytes(key, "in", tar_bytes({"settings.json": b'{"hi": 1}'})))
+        kf = self.tmp / "key"
+        kf.write_text(b64(key))
+        env = {k: v for k, v in os.environ.items() if not k.startswith("SLOWAPP_")}
+        env.update(SLOWAPP_CONTRACT="5", SLOWAPP_APP="test", SLOWAPP_RUN_ID="r1", SLOWAPP_FEEDS=FEEDS,
+                   SLOWAPP_MANIFEST=str(self.tmp / "none.toml"), SLOWAPP_JOB_LOCK=str(self.tmp / "lock"),
+                   SLOWAPP_REMOTE_RETRY_S="0", SLOWAPP_REMOTE_DATA_NEW="1", SLOWAPP_REMOTE_KEY_FILE=str(kf),
+                   SLOWAPP_REMOTE_IN=self.link("GET", "runs/r1/in.tar"),
+                   SLOWAPP_REMOTE_OUT=self.link("PUT", "runs/r1/out.tar"),
+                   SLOWAPP_REMOTE_LOG=self.link("PUT", "runs/r1/log"),
+                   SLOWAPP_REMOTE_DATA_PUT=self.link("PUT", "data/test/b1.tar.gz"))
+        p = subprocess.run(APP + ["slowapp-remote", "job", "remote"], env=env, capture_output=True, timeout=60)
+        self.assertEqual(p.returncode, 0, p.stdout.decode())
+        out = untar(seal.open_bytes(key, "out", self.req("GET", f"/{self.bucket}/runs/r1/out.tar")))
+        self.assertEqual(json.loads(out["seen.json"])["settings"], {"hi": 1})
+        data = untar(seal.open_bytes(key, "data", self.req("GET", f"/{self.bucket}/data/test/b1.tar.gz")))
+        self.assertEqual(data["count.txt"], b"1")
+        self.assertIn(b"remote job: to stdout", seal.open_bytes(key, "log", self.req("GET", f"/{self.bucket}/runs/r1/log")))
 
 
 if __name__ == "__main__":
