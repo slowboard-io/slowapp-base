@@ -213,10 +213,10 @@ class Output(Env):
 class Contract4(Env):
     """Docs, args and results (app UIs)."""
 
-    def test_contracts_3_to_5_and_no_other(self):
-        self.assertEqual(self.ctx(SLOWAPP_CONTRACT="3").app, self.ctx(SLOWAPP_CONTRACT="5").app)
+    def test_contracts_3_to_6_and_no_other(self):
+        self.assertEqual(self.ctx(SLOWAPP_CONTRACT="3").app, self.ctx(SLOWAPP_CONTRACT="6").app)
         with self.assertRaises(kit.ContractError):
-            self.ctx(SLOWAPP_CONTRACT="6")
+            self.ctx(SLOWAPP_CONTRACT="7")
 
     def test_args_and_docs_from_in(self):
         ctx = self.ctx()
@@ -308,6 +308,157 @@ class Contract5(Env):
         self.assertEqual(doc["surface"], "1360x360.g16")
         png = (Path(self.env["SLOWAPP_OUT"]) / "feeds" / "sleep" / "cards" / "home.png").read_bytes()
         kit.check_png(png, (1360, 360), "g16")
+
+
+CONTRACT6 = """
+[app]
+id = "test"
+contract = 6
+network = "none"
+[secrets.google]
+kind = "oauth"
+auth = "google"
+multiple = true
+[secrets.github]
+kind = "oauth"
+auth = "github"
+optional = true
+[secrets.ai_key]
+label = "AI key"
+[auth.google]
+authorize_url = "https://accounts.example/auth"
+token_url = "https://accounts.example/token"
+scopes = ["calendar.readonly", "email"]
+[auth.github]
+authorize_url = "https://github.example/auth"
+token_url = "https://github.example/token"
+[artifacts.agenda]
+max_kb = 1
+[[job]]
+name = "sync"
+kind = "sync"
+network = "egress"
+secrets = ["google", "github", "ai_key"]
+[[job]]
+name = "render"
+inputs = ["self:agenda"]
+"""
+
+
+class Contract6(Env):
+    """token(), job kinds and artifacts (the sync/render split)."""
+
+    def setUp(self):
+        super().setUp()
+        (self.tmp / "slowapp.toml").write_text(CONTRACT6)
+        self.env.update(SLOWAPP_CONTRACT="6", SLOWAPP_JOB="sync")
+        self.sec = self.tmp / "secrets"
+
+    def tok(self, path, access="ya29.x", **kw):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(dict({"access_token": access, "expires_at": "2026-10-06T17:00:00Z",
+                                         "scopes": ["calendar.readonly", "email"]}, **kw)))
+
+    def test_kinds_from_the_manifest(self):
+        self.assertEqual(self.ctx().kind, "sync")
+        self.assertEqual(self.ctx(SLOWAPP_JOB="render").kind, "render")
+        self.assertEqual(self.ctx(SLOWAPP_JOB="other").kind, "render", "a job without kind is render")
+        self.assertEqual(kit.manifest.job_spec(self.ctx().manifest, "sync"),
+                         {"kind": "sync", "network": "egress", "secrets": ["google", "github", "ai_key"]})
+        self.assertEqual(kit.manifest.job_spec(self.ctx().manifest, "render"),
+                         {"kind": "render", "network": "none", "secrets": []})
+        (self.tmp / "slowapp.toml").write_text('[app]\nid = "t"\ncontract = 5\nnetwork = "egress"\nsecrets = ["k"]\n')
+        self.assertIsNone(self.ctx().kind)
+        self.assertEqual(kit.manifest.job_spec(self.ctx().manifest, "render"),
+                         {"kind": None, "network": "egress", "secrets": ["k"]})
+
+    def test_token_multiple_accounts(self):
+        ctx = self.ctx()
+        with self.assertRaises(kit.NeedsConfig):
+            ctx.token("google")
+        self.tok(self.sec / "google" / "b@example.com.json", "tok-b")
+        self.tok(self.sec / "google" / "a@example.com.json", "tok-a")
+        toks = ctx.token("google")
+        self.assertEqual([(t["account"], t["access_token"]) for t in toks],
+                         [("a@example.com", "tok-a"), ("b@example.com", "tok-b")])
+        self.assertEqual(toks[0]["scopes"], ["calendar.readonly", "email"])
+        self.assertEqual(kit.token("google", ctx=ctx), toks)
+
+    def test_token_single_optional_and_bad(self):
+        ctx = self.ctx()
+        self.assertIsNone(ctx.token("github"), "optional in the manifest: None")
+        self.tok(self.sec / "github.json", "gho_1")
+        self.assertEqual(ctx.token("github")["access_token"], "gho_1")
+        (self.sec / "github.json").write_text('{"token": 1}')
+        with self.assertRaises(kit.ContractError):
+            ctx.token("github")
+        with self.assertRaises(kit.ContractError):
+            ctx.token("ai_key")                 # a value: secret()
+        with self.assertRaises(kit.ContractError):
+            ctx.secret("google")                # an oauth secret: token()
+        (self.sec / "ai_key").write_text("sk-1\n")
+        self.assertEqual(ctx.secret("ai_key"), "sk-1")
+
+    def test_token_without_a_manifest_goes_by_the_files(self):
+        (self.tmp / "slowapp.toml").unlink()
+        ctx = self.ctx()
+        with self.assertRaises(kit.NeedsConfig):
+            ctx.token("google")
+        self.assertIsNone(ctx.token("google", optional=True))
+        self.tok(self.sec / "google" / "a.json")
+        self.assertEqual(ctx.token("google")[0]["account"], "a")
+        self.tok(self.sec / "github.json")
+        self.assertEqual(ctx.token("github")["access_token"], "ya29.x")
+
+    def test_token_in_fixture_mode(self):
+        ctx = self.ctx(SLOWAPP_MODE="fixture")
+        self.assertEqual(ctx.token("google"), [{"access_token": "fixture-google", "account": "fixture",
+                                                "expires_at": "2026-10-06T10:00:00-07:00",
+                                                "scopes": ["calendar.readonly", "email"]}])
+        self.assertEqual(ctx.token("github")["access_token"], "fixture-github")
+        self.assertEqual(ctx.token("github")["scopes"], [])
+
+    def test_sync_writes_render_reads(self):
+        ctx = self.ctx()
+        ctx.write_artifact("agenda", "agenda.json", {"b": 1, "a": [1, 2]})
+        ctx.write_artifact("agenda", "note.txt", "hi")
+        out = self.tmp / "out" / "artifacts" / "agenda"
+        self.assertEqual((out / "agenda.json").read_text(), '{"a":[1,2],"b":1}\n')
+        with self.assertRaises(kit.ContractError):
+            ctx.write_artifact("other", "x.json", 1)        # not declared
+        with self.assertRaises(kit.ContractError):
+            ctx.write_artifact("agenda", "../x.json", 1)
+        with self.assertRaises(kit.ContractError):
+            self.ctx(SLOWAPP_JOB="render").artifact_dir("agenda")
+        # The hub hands render the sync job's /out/artifacts as /in/artifacts.
+        r = self.ctx(SLOWAPP_JOB="render")
+        self.assertIsNone(r.artifact("agenda"))
+        self.assertEqual(r.read_artifact("agenda", "agenda.json", []), [])
+        (self.tmp / "in" / "artifacts").mkdir()
+        os.rename(out, self.tmp / "in" / "artifacts" / "agenda")
+        r = self.ctx(SLOWAPP_JOB="render")
+        self.assertEqual(r.read_artifact("agenda", "agenda.json"), {"a": [1, 2], "b": 1})
+        self.assertEqual(r.read_artifact("agenda", "note.txt"), b"hi")
+        self.assertIsNone(r.read_artifact("agenda", "missing.json"))
+        self.assertIn("artifact:agenda/agenda.json", r._fetched, "counts towards exit_if_unchanged")
+
+    def test_fixture_artifacts_come_from_the_fixture(self):
+        d = self.tmp / "data" / "artifacts" / "agenda"
+        d.mkdir(parents=True)
+        (d / "agenda.json").write_text('{"days": 3}')
+        self.assertEqual(self.ctx(SLOWAPP_JOB="render", SLOWAPP_MODE="fixture").read_artifact("agenda", "agenda.json"),
+                         {"days": 3})
+        self.assertIsNone(self.ctx(SLOWAPP_JOB="render").artifact("agenda"), "only in fixture mode")
+
+    def test_an_artifact_over_max_kb_is_a_contract_error(self):
+        @kit.job("c6sync")
+        def big(ctx):
+            ctx.write_artifact("agenda", "big.bin", b"x" * 2048)
+
+        (self.tmp / "slowapp.toml").write_text(CONTRACT6.replace('name = "sync"', 'name = "c6sync"'))
+        code, msg = kit.execute("c6sync", self.ctx(SLOWAPP_JOB="c6sync"))
+        self.assertEqual(code, 64)
+        self.assertIn("over its max_kb", msg)
 
 
 class Net(Env):

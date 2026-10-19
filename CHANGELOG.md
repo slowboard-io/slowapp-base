@@ -16,6 +16,16 @@ this repo). Contracts 3 to 5 keep working unchanged.
   as are app-level `secrets` in a contract 6 manifest; before contract 6 they still read as value
   secrets on every job. The SDK's schema and validator, the catalog's grants (`oauth`, and the
   network from the jobs) and the catalog schema (contracts 3 to 6) follow.
+- **Kit.** Contract 6 is accepted (`SLOWAPP_CONTRACT` 3 to 6). `token(name)` / `ctx.token(name)`
+  reads an oauth secret's access token, `/run/secrets/<name>.json` as a dict, or with `multiple`
+  each `/run/secrets/<name>/<account>.json` as a list (each with its `account`); missing is exit 5
+  unless optional, and fixture mode gives placeholders. `secret()` is unchanged (and refuses an
+  oauth secret). Sync jobs write artifacts with `ctx.write_artifact(name, file, value)` (or
+  `ctx.artifact_dir(name)`), checked against `[artifacts]` and `max_kb` when the job ends; render
+  reads them with `ctx.read_artifact(name, file)` / `ctx.artifact(name)` from
+  `/in/artifacts/<name>/`, or in fixture mode from the fixture's `artifacts/`. What it reads counts
+  towards `exit_if_unchanged`. `ctx.kind` and `slowapp_kit.manifest.job_spec` say what a job is
+  granted.
 
 ## 1.4.1
 

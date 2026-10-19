@@ -1,4 +1,4 @@
-"""slowapp_kit: the app side of contracts 3 to 5 (see MANIFEST.md and the hub's docs/SLOWBOARD.md §8).
+"""slowapp_kit: the app side of contracts 3 to 6 (see MANIFEST.md and the hub's docs/SLOWBOARD.md §8).
 
 An app is a container whose command is `job <name>` or `serve`. It reads its run from the
 environment (SLOWAPP_*), draws each requested feed at its surface size in the four inks, and
@@ -32,6 +32,22 @@ w, h, inks; None in fixture mode) and ctx.feeds holds only its feeds, so draw wh
             img = snap_g16(draw_today(s.w, s.h))  # or grey(level) colours throughout
         ...
 
+Contract 6 (sync and render): a sync job (kind = "sync") fetches with its secrets and writes
+artifacts; render draws from them with no network and no secrets:
+
+    @job("sync")
+    def sync(ctx):
+        for acct in ctx.token("google"):             # [secrets.google] kind = "oauth", multiple
+            events = ctx.http_json(URL, headers={"Authorization": f"Bearer {acct['access_token']}"})
+            ...
+        ctx.write_artifact("agenda", "agenda.json", agenda)        # /out/artifacts/agenda/
+
+    @job("render")
+    def render(ctx):
+        agenda = ctx.read_artifact("agenda", "agenda.json", [])    # /in/artifacts/agenda/
+        ctx.exit_if_unchanged()
+        ...
+
 What it covers: the ink check and exact-size check on every card; blob ids (for tests); secret()
 that honours fixture mode; fetch-then-draw snapshots that double as fixtures; an HTTP helper that
 fits the deadline; /out/.metrics.json; one handler serving both the CLI and the warm UI; and BLAS
@@ -46,7 +62,7 @@ import sys  # noqa: E402
 
 from PIL import ImageFont  # noqa: E402
 
-from . import net, output  # noqa: E402
+from . import manifest, net, output  # noqa: E402
 from .context import Context, Device, Surface, load_manifest  # noqa: E402
 from .errors import (EXIT_CONTRACT, EXIT_NEEDS_CONFIG, EXIT_OK, EXIT_TRANSIENT, EXIT_UNCHANGED,  # noqa: E402
                      ContractError, JobExit, NeedsConfig, Transient, Unchanged)
@@ -65,6 +81,9 @@ Context.write_timing = output.write_timing
 Context.write_doc = output.write_doc
 Context.result = output.write_result
 Context.secret = net.secret
+Context.token = net.token
+Context.artifact_dir = output.artifact_dir
+Context.write_artifact = output.write_artifact
 Context.http_get = net.http_get
 Context.http_json = net.http_json
 Context.fetch = net.fetch
@@ -86,11 +105,16 @@ def secret(name, optional=False, ctx=None):
     return net.secret(ctx or Context.from_env(), name, optional)
 
 
+def token(name, optional=None, ctx=None):
+    """Module-level form of ctx.token (contract 6, oauth secrets)."""
+    return net.token(ctx or Context.from_env(), name, optional)
+
+
 __all__ = [
     "BLACK", "WHITE", "YELLOW", "RED", "INKS", "PALETTE", "GREYS", "INK_SETS", "Card", "Context",
     "Device", "Surface", "JOBS", "grey", "snap_g16",
     "EXIT_OK", "EXIT_UNCHANGED", "EXIT_TRANSIENT", "EXIT_NEEDS_CONFIG", "EXIT_CONTRACT",
     "ContractError", "InkError", "JobExit", "NeedsConfig", "Transient", "Unchanged",
     "atomic_write", "blob_id", "check_inks", "check_png", "encode_png", "execute", "font", "job",
-    "load_manifest", "log", "main", "pack_rows", "route", "run_in_child", "secret", "to_indexed",
+    "load_manifest", "log", "main", "pack_rows", "route", "run_in_child", "secret", "to_indexed", "token",
 ]

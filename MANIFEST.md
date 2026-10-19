@@ -256,14 +256,22 @@ The full tables are docs/SLOWBOARD.md §8.2–§8.4; `slowapp_kit` reads all of 
   UI gets jobs as `POST /_sb/jobs/<name>` with slowbhub's body `{"run_id", "out", "env"}`: the kit
   applies the per-run keys of `env` (`SLOWAPP_FEEDS`, `SLOWAPP_NOW`/`FOR`/`DEADLINE`, `SLOWAPP_REASON`,
   `SLOWAPP_MODE`, `SLOWAPP_RUN_ID`, `TZ`), ignores the rest, and writes to `out` (under `/out`).
-- **Environment:** `SLOWAPP_CONTRACT` (the app's: `3` to `5`), `SLOWAPP_APP`, `SLOWAPP_JOB`, `SLOWAPP_RUN_ID`, `SLOWAPP_REASON`,
+- **Environment:** `SLOWAPP_CONTRACT` (the app's: `3` to `6`), `SLOWAPP_APP`, `SLOWAPP_JOB`, `SLOWAPP_RUN_ID`, `SLOWAPP_REASON`,
   `SLOWAPP_NOW`, `SLOWAPP_FOR`, `SLOWAPP_DEADLINE`, `TZ`, `SLOWAPP_MODE` (`live` | `fixture`),
   `SLOWAPP_FEEDS`, `SLOWAPP_STATE=/data`; contract 5: `SLOWAPP_DEVICE`
   (`{"id","profile","w","h","inks"}`, unset in fixture mode); BLAS threads are 1.
 - **Mounts:** `/data` (rw; ro fixture copy), `/out`, `/in` (ro: `settings.json`, `layout.json`,
-  `events.jsonl`; contract 4 adds `args.json` and `docs/<name>.json`), `/tmp` and `/cache` (tmpfs),
-  `/run/secrets/<name>` (ro, live only), `/run/sb` (`ui.sock`, and `ui.log`: the UI's stderr and
-  its job children's, kept as a 256 KB ring by the kit). The root filesystem is read-only.
+  `events.jsonl`; contract 4 adds `args.json` and `docs/<name>.json`; contract 6 adds, for render,
+  `artifacts/<name>/`), `/tmp` and `/cache` (tmpfs), `/run/secrets` (ro, live only), `/run/sb`
+  (`ui.sock`, and `ui.log`: the UI's stderr and its job children's, kept as a 256 KB ring by the
+  kit). The root filesystem is read-only.
+- **Secrets** (`/run/secrets`): a value secret is the file `<name>` (`secret(name)`). An oauth
+  secret (contract 6) is `<name>.json`, `{"access_token", "expires_at", "scopes"}` with
+  `expires_at` in RFC 3339, about an hour after the run starts; with `multiple = true` it's
+  `<name>/<account>.json`, one per connected account (`token(name)` gives a dict, or a list with
+  each `account`). The hub refreshes the token before the run; the refresh token never reaches it.
+  Contract 6: only a sync job's own `secrets` are there, and a render job has none. Contracts 3
+  to 5: the app's secrets, on every job.
 - **Prompts** (the `prompts` grant): `/out/prompts.json`, each prompt's answers as
   `prompts/<id>/<binding>.png`, and optionally its question card `prompts/<id>/ask.png`
   (`"ask"` in prompts.json). With a question card the prompt takes its slot's whole body and the
@@ -272,7 +280,10 @@ The full tables are docs/SLOWBOARD.md §8.2–§8.4; `slowapp_kit` reads all of 
   8-bit indexed, PLTE within the inks; g16: 8-bit grey on the sixteen levels; no tRNS, ≤ 256 KB,
   ≤ 32 cards), plus optional `prompts.json`,
   `summary.json`, `cache_key`, `timing.json` and the kit's `.metrics.json`. Contract 4:
-  `result.json` (back to the UI's `jobs.run`) and `docs/<name>.json`.
+  `result.json` (back to the UI's `jobs.run`) and `docs/<name>.json`. Contract 6, sync jobs:
+  `artifacts/<name>/` (`ctx.write_artifact(name, file, value)` or `ctx.artifact_dir(name)`), each
+  within its `max_kb`; render reads them with `ctx.read_artifact(name, file)` or
+  `ctx.artifact(name)` (a directory, or None before the first sync).
 - **Exit codes:** 0 ingest · 3 unchanged · 4 transient · 5 needs config · 64 contract error ·
   137 killed. Anything else is a failure with backoff.
 
@@ -340,8 +351,12 @@ The cloud hub runs each job on a throwaway Fly Machine made from the app's image
 
 ## Fixture mode
 
-`SLOWAPP_MODE=fixture`, `--network none`, no secrets (`ctx.secret()` returns `fixture-<name>`), the
-example's fixture as a read-only `/data` and a fixed `SLOWAPP_NOW`. The same fixture must give the
+`SLOWAPP_MODE=fixture`, `--network none`, no secrets (`ctx.secret()` returns `fixture-<name>`;
+`ctx.token()` an access token `fixture-<name>` with the provider's scopes, and one account,
+`fixture`, for `multiple`), the example's fixture as a read-only `/data` and a fixed `SLOWAPP_NOW`.
+Contract 6: a render example's artifacts come from the fixture, `fixtures/<name>/artifacts/<artifact>/`
+(which `ctx.read_artifact` reads when `/in/artifacts` has none), so a live sync run's
+`/out/artifacts` can be copied in as it is. The same fixture must give the
 same pixels: `slowapp fixture` prints each card's blob id, so a change in pixels shows up
 as a changed id. The runner uses a CI subset of §8.4: the same isolation flags (read-only root,
 `--network none`, memory = swap, `--pids-limit 64`, `--oom-score-adj 500`, caps dropped,
