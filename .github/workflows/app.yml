@@ -337,7 +337,7 @@ jobs:
           cp out/catalog/catalog.json "catalog-$id-$V.json"
           gh release upload "$GITHUB_REF_NAME" "catalog-$id-$V.json" "catalog-$id-$V.tar.gz" --clobber
           echo "files=catalog-$id-$V.json:application/vnd.slowboard.catalog.v1+json catalog-$id-$V.tar.gz:application/vnd.slowboard.catalog.screens.v1.tar+gzip" >> "$GITHUB_OUTPUT"
-      - uses: oras-project/setup-oras@v1
+      - uses: oras-project/setup-oras@v2
         if: steps.catalog.outputs.files != ''
         with:
           version: 1.2.0
