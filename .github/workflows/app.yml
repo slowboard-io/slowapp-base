@@ -295,12 +295,12 @@ jobs:
       # The catalog bundle: the test job's renders plus the pushed image's sizes, the version and
       # the armv7 timings; attached to the release and pushed as an OCI artifact referring to the
       # image's digest (what the registry checks, and what the site and hubs render).
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: catalog
           path: out/catalog
         continue-on-error: true
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: armv7-timings
           path: out/armv7
