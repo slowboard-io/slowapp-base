@@ -4,12 +4,17 @@
 // against [settings], job args checked by type, on_change jobs debounced 2 s, and a job's doc
 // writes applied only if the doc hasn't moved since it started.
 //
+// Protocol 2 (contract 6): secrets have a kind. A value is set and cleared as before; an oauth
+// secret is connected with secrets.connect, which here is faked: it answers a dev-server link,
+// and opening it (or completeConnect) "signs in" an account with the provider's scopes. Each run
+// gets only its job's secrets (jobSpec), oauth ones as dev access tokens, and last_used follows.
+//
 // The chrome's own calls (ui.*, device.preview) are the dev chrome's, as they are the hub
 // page's; CHROME_CALLS lists them.
 
 export const HUB_CALLS = [
   "connect", "docs.get", "docs.put", "docs.watch", "settings.get", "settings.set",
-  "secrets.status", "secrets.set", "secrets.clear", "jobs.run", "events.watch", "backend.fetch",
+  "secrets.status", "secrets.set", "secrets.clear", "secrets.connect", "jobs.run", "events.watch", "backend.fetch",
 ];
 export const CHROME_CALLS = ["ui.title", "ui.toast", "ui.confirm", "ui.resize", "device.preview"];
 
@@ -27,6 +32,32 @@ export class HubError extends Error {
     const { code, message, stack, ...rest } = this; // eslint-disable-line no-unused-vars
     return rest;
   }
+}
+
+/**
+ * What a manifest grants one job (slowapp_kit/manifest.py's job_spec): contract 6, a sync job its
+ * own network and secrets and a render job neither; before 6, every job the app's.
+ */
+export function jobSpec(manifest, name) {
+  const app = manifest.app || {};
+  const j = (manifest.job || []).find((x) => x.name === name) || {};
+  if ((app.contract ?? 3) < 6) {
+    return { kind: null, network: app.network || "none", secrets: [...(app.secrets || []), ...(app.optional_secrets || [])] };
+  }
+  if (j.kind !== "sync") return { kind: "render", network: "none", secrets: [] };
+  return { kind: "sync", network: j.network || app.network || "none", secrets: [...(j.secrets || [])] };
+}
+
+/** Every secret the manifest declares: [{name, optional, kind, label, help, auth, multiple}]. */
+export function secretDecls(manifest) {
+  const app = manifest.app || {};
+  return [
+    ...(app.secrets || []).map((name) => ({ name, optional: false, kind: "value" })),
+    ...(app.optional_secrets || []).map((name) => ({ name, optional: true, kind: "value" })),
+    ...Object.entries(manifest.secrets || {}).map(([name, s]) => ({
+      name, optional: !!s.optional, kind: s.kind || "value", label: s.label, help: s.help, auth: s.auth, multiple: !!s.multiple,
+    })),
+  ];
 }
 
 /** Check settings against a [settings] schema; the hub's rules (settings.rs). */
@@ -104,9 +135,73 @@ export class MockHub {
   }
 
   secretStatus() {
-    const req = this.app.secrets || [], opt = this.app.optional_secrets || [];
-    return [...req.map((n) => [n, false]), ...opt.map((n) => [n, true])]
-      .map(([name, optional]) => ({ name, optional, set: this.state.secrets.includes(name) }));
+    this.oauth ||= {};
+    this.lastUsed ||= {};
+    return secretDecls(this.m).map((d) => {
+      const s = { name: d.name, optional: d.optional, set: this.state.secrets.includes(d.name), kind: d.kind, last_used: this.lastUsed[d.name] || null };
+      if (d.label) s.label = d.label;
+      if (d.help) s.help = d.help;
+      if (d.kind === "oauth") {
+        const accounts = this.oauth[d.name] || [];
+        Object.assign(s, {
+          set: accounts.length > 0, auth: d.auth, multiple: d.multiple,
+          scopes: [...new Set(accounts.flatMap((a) => a.scopes))],
+          granted_at: accounts.map((a) => a.granted_at).sort().at(-1) || null,
+          accounts: accounts.map((a) => ({ ...a })),
+        });
+      }
+      return s;
+    });
+  }
+
+  secretDecl(name) {
+    const d = secretDecls(this.m).find((s) => s.name === name);
+    if (!d) throw new HubError("invalid", "not one of this app's secrets");
+    return d;
+  }
+
+  emitSecret(name) {
+    const s = this.secretStatus().find((x) => x.name === name);
+    this.emit({ event: "secret", ...s });
+    return s;
+  }
+
+  /**
+   * The provider's side of a faked sign-in: `account` (default dev@example.com) is connected
+   * with the [auth] provider's scopes. A multiple secret adds it; any other replaces.
+   */
+  completeConnect(name, account = "dev@example.com") {
+    const d = this.secretDecl(name);
+    if (d.kind !== "oauth") throw new HubError("kind", "not an oauth secret");
+    const scopes = [...(this.m.auth?.[d.auth]?.scopes || [])];
+    const acct = { account, scopes, granted_at: this.now().toISOString(), last_used: null };
+    this.oauth ||= {};
+    const others = d.multiple ? (this.oauth[name] || []).filter((a) => a.account !== account) : [];
+    this.oauth[name] = [...others, acct].sort((a, b) => a.account.localeCompare(b.account));
+    return this.emitSecret(name);
+  }
+
+  /** What a job gets: {secrets: {name: value}, tokens: {name: token | [token]}}, its own only. */
+  grants(job) {
+    const spec = jobSpec(this.m, job);
+    const secrets = {}, tokens = {};
+    const at = this.now();
+    const expires = new Date(at.getTime() + 3600e3).toISOString();
+    for (const name of spec.secrets) {
+      const d = secretDecls(this.m).find((s) => s.name === name);
+      if (!d) continue;
+      if (d.kind === "oauth") {
+        const accts = this.oauth?.[name] || [];
+        if (!accts.length) continue;
+        const tok = (a) => ({ access_token: `dev-${name}-${a.account}`, expires_at: expires, scopes: a.scopes });
+        tokens[name] = d.multiple ? accts.map((a) => ({ ...tok(a), account: a.account })) : tok(accts[0]);
+        for (const a of accts) a.last_used = at.toISOString();
+      } else if (this.secretValues?.[name] != null) {
+        secrets[name] = this.secretValues[name];
+      } else continue;
+      this.lastUsed = { ...(this.lastUsed || {}), [name]: at.toISOString() };
+    }
+    return { secrets, tokens };
   }
 
   doc(name) {
@@ -155,13 +250,26 @@ export class MockHub {
       case "secrets.set":
       case "secrets.clear": {
         const [name, value] = args;
-        if (!this.secretStatus().some((s) => s.name === name)) throw new HubError("invalid", "not one of this app's secrets");
+        const d = this.secretDecl(name);
         const set = call === "secrets.set";
+        if (d.kind === "oauth") {
+          if (set) throw new HubError("kind", "an oauth secret is connected, not set (secrets.connect)");
+          this.oauth ||= {};
+          this.oauth[name] = value == null ? [] : (this.oauth[name] || []).filter((a) => a.account !== value);
+          return { name, set: this.emitSecret(name).set };
+        }
         if (set && (typeof value !== "string" || !value.length || Buffer.byteLength(value) > MAX_SECRET)) throw new HubError("invalid", `a secret is 1 to ${MAX_SECRET} bytes`);
         this.state.secrets = this.state.secrets.filter((n) => n !== name).concat(set ? [name] : []);
         this.secretValues = { ...(this.secretValues || {}), [name]: set ? value : undefined };
         this.save();
+        this.emitSecret(name);
         return { name, set };
+      }
+      case "secrets.connect": {
+        const [name, opts] = args;
+        if (this.secretDecl(name).kind !== "oauth") throw new HubError("kind", "a value secret is set, not connected (secrets.set)");
+        const q = opts?.account ? `?account=${encodeURIComponent(opts.account)}` : "";
+        return { url: `/__slowboard/connect/${encodeURIComponent(name)}${q}` };
       }
       case "jobs.run": return this.run(args[0], args[1], "manual");
       case "events.watch": return true;
@@ -186,8 +294,9 @@ export class MockHub {
     const docs = Object.fromEntries(Object.keys(this.docDecls).filter((n) => this.state.docs[n]).map((n) => [n, this.state.docs[n].value]));
     this.emit({ event: "run", app: this.app.id, job: name, run, phase: "started", reason });
     let r;
+    const { secrets, tokens } = this.grants(name);
     try {
-      r = await this.runJob(name, { args: a.values, docs, settings: this.state.settings, secrets: this.secretValues || {}, reason });
+      r = await this.runJob(name, { args: a.values, docs, settings: this.state.settings, secrets, tokens, spec: jobSpec(this.m, name), reason });
     } catch (e) {
       r = { exit: 1, log: String(e?.stack || e) };
     }

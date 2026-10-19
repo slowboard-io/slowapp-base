@@ -38,6 +38,17 @@ this repo). Contracts 3 to 5 keep working unchanged.
   (ctypes; the images gain no package), format in MANIFEST.md, "Sealed runs". An optional
   `data_key` seals `/data` across runs. A sealed run keeps the job's output out of the machine's
   log. Without the variable, nothing changes.
+- **JS: bridge protocol 2.** `protocol.json` adds `secrets.connect(name)` → `{url}` (the hub's page
+  starts the sign-in at top level; the frame never sees the provider's URL, code or state), a
+  `secret` event, the error `kind`, and a wider `secrets.status` (`kind`, `label`, `help`,
+  `last_used`, and for oauth `auth`, `multiple`, `scopes`, `granted_at`, `accounts`);
+  `secrets.clear` takes an account. The handshake still says protocol 1, so protocol 1 bundles
+  keep connecting: an app says 2 in its `connect` call and the chrome answers the protocol both
+  speak (`app.protocol`). `@slowboard/app` gains `secrets.connect` and `secrets.watch`,
+  `@slowboard/app-react`'s `useSecrets` gains `connect` and follows the events, and
+  `@slowboard/ui/secrets` adds `<sb-secret-field>` and `<sb-connect>` (framework-free, CSP-clean).
+  `@slowboard/dev` fakes the sign-in, gives each job only its own secrets (oauth as dev tokens),
+  runs render without the network and carries a sync run's artifacts to the next render.
 - **Images:** `SLOWAPP_CONTRACT=6` and the label `org.slowboard.contract=6` (it said 4, and the
   description "contracts 3 and 4"); the build checks that sealing works on each platform.
 

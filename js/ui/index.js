@@ -8,6 +8,10 @@
 import { createElement as h } from "react";
 import "./ui.css";
 
+// The secrets elements (<sb-secret-field>, <sb-connect>): framework-free, defined on import. In
+// React 19, <sb-connect name="google" app={app} /> sets the app as a property.
+export { SbConnect, SbSecretField, setApp } from "./secrets.js";
+
 const cx = (...c) => c.filter(Boolean).join(" ");
 
 export function Stack({ className, ...p }) { return h("div", { className: cx("sb-stack", className), ...p }); }

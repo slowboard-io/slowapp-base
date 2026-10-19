@@ -23,8 +23,10 @@ export declare function useSettings(): [
 export declare function useSecrets(): {
   status: SecretStatus[];
   isSet(name: string): boolean;
-  set(name: string, value: string): Promise<void>;
-  clear(name: string): Promise<void>;
+  set(name: string, value: string): Promise<{ name: string; set: boolean }>;
+  clear(name: string, account?: string): Promise<{ name: string; set: boolean }>;
+  /** Protocol 2: start an oauth sign-in; `status` updates when it finishes. */
+  connect(name: string, opts?: { account?: string }): Promise<{ url: string }>;
   busy: boolean;
 };
 export declare function useJob<R = unknown>(name: string): {

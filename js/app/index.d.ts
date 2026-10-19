@@ -1,11 +1,11 @@
-// Types for @slowboard/app (protocol 1).
+// Types for @slowboard/app (protocol 2).
 
-export declare const PROTOCOL: 1;
+export declare const PROTOCOL: 2;
 export declare const CALLS: readonly string[];
 
 export type ErrorCode =
   | "conflict" | "invalid" | "forbidden" | "not_found" | "too_big" | "no_backend"
-  | "unknown_call" | "failed" | "timeout" | "no_hub" | "protocol";
+  | "unknown_call" | "failed" | "kind" | "timeout" | "no_hub" | "protocol";
 
 export declare class BridgeError extends Error {
   code: ErrorCode;
@@ -17,7 +17,28 @@ export declare class BridgeError extends Error {
 }
 
 export interface Doc<T = unknown> { rev: number; value: T | null; at: string | null }
-export interface SecretStatus { name: string; optional: boolean; set: boolean }
+/** One connected account of an oauth secret. */
+export interface SecretAccount { account: string; scopes: string[]; granted_at: string | null; last_used: string | null }
+/**
+ * A secret's status, never its value. Protocol 1 hubs send only name, optional and set; protocol 2
+ * adds the rest (times are RFC 3339). For an oauth secret, `set` means connected.
+ */
+export interface SecretStatus {
+  name: string;
+  optional: boolean;
+  set: boolean;
+  kind?: "value" | "oauth";
+  label?: string;
+  help?: string;
+  last_used?: string | null;
+  /** oauth: the [auth] provider, whether it holds several accounts, and what was granted. */
+  auth?: string;
+  multiple?: boolean;
+  scopes?: string[];
+  granted_at?: string | null;
+  accounts?: SecretAccount[];
+}
+export interface SecretEvent extends SecretStatus { event: "secret" }
 export interface JobResult<R = unknown> {
   run: string;
   outcome: string;
@@ -53,6 +74,8 @@ export interface AppInfo extends Theme {
 export interface App {
   port: MessagePort;
   info: AppInfo;
+  /** The protocol agreed at connect: 2, or 1 from an older hub. */
+  readonly protocol: number;
   call<T = unknown>(name: string, ...args: unknown[]): Promise<T>;
   on(event: string, f: (m: any) => void): () => void;
   docs: {
@@ -67,7 +90,10 @@ export interface App {
   secrets: {
     status(): Promise<SecretStatus[]>;
     set(name: string, value: string): Promise<{ name: string; set: boolean }>;
-    clear(name: string): Promise<{ name: string; set: boolean }>;
+    clear(name: string, account?: string): Promise<{ name: string; set: boolean }>;
+    /** Protocol 2: start an oauth sign-in at top level; the outcome comes as a `secret` event. */
+    connect(name: string, opts?: { account?: string }): Promise<{ url: string }>;
+    watch(f: (e: SecretEvent) => void): () => void;
   };
   jobs: { run<R = unknown>(name: string, args?: Record<string, unknown>): Promise<JobResult<R>> };
   events: { runs(f: (e: RunEvent) => void): () => void };

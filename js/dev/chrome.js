@@ -80,7 +80,10 @@ async function answer(p, m) {
     let value;
     if (CHROME.includes(m.call)) value = await chrome[m.call](...(m.args || []));
     else value = await hubCall(m.call, m.args || []);
-    if (m.call === "connect") value = { ...value, ...themeMsg(), locale: navigator.language, protocol: 1 };
+    // The protocol both speak: the app says its own in connect's argument (protocol 1 apps don't).
+    if (m.call === "connect") value = { ...value, ...themeMsg(), locale: navigator.language, protocol: Math.min(2, Number(m.args?.[0]?.protocol) || 1) };
+    // An oauth sign-in starts at top level, from the chrome; the frame gets only the hub's link.
+    if (m.call === "secrets.connect" && value?.url) window.open(value.url, "_blank", "noopener");
     if (m.call === "jobs.run") $("run").hidden = true;
     reply({ ok: true, value }, value?.bytes instanceof ArrayBuffer ? [value.bytes] : []);
   } catch (e) {

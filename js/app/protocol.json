@@ -1,18 +1,34 @@
 {
-  "comment": "The app UI bridge, protocol 1 (epaper-dashboard docs/SLOWBOARD.md §7.7 App UIs). The hub's chrome (crates/slowhub/web/app.js) and the dev chrome (@slowboard/dev) implement every call; @slowboard/app wraps them. A copy lives in epaper-dashboard at crates/slowhub/web/protocol.json; keep the two identical.",
-  "protocol": 1,
+  "comment": "The app UI bridge, protocol 2 (epaper-dashboard docs/SLOWBOARD.md §7.7 App UIs). The hub's chrome (crates/slowhub/web/app.js) and the dev chrome (@slowboard/dev) implement every call; @slowboard/app wraps them. A copy lives in epaper-dashboard at crates/slowhub/web/protocol.json; keep the two identical.",
+  "protocol": 2,
   "handshake": { "message": { "slowboard": "connect", "protocol": 1 }, "transfer": "MessagePort" },
+  "negotiation": "The handshake still says protocol 1: protocol 1 bundles refuse any other number, and they must keep connecting. An app says the protocol it speaks in connect's argument, {protocol: 2}; the chrome answers connect with `protocol`, the highest both speak (1 from a protocol 1 chrome, which ignores the argument). A protocol 1 app sends no argument and gets protocol 1 behaviour: it never calls the protocol 2 calls and ignores events it doesn't know.",
   "calls": [
     "connect",
     "docs.get", "docs.put", "docs.watch",
     "settings.get", "settings.set",
-    "secrets.status", "secrets.set", "secrets.clear",
+    "secrets.status", "secrets.set", "secrets.clear", "secrets.connect",
     "jobs.run",
     "events.watch",
     "ui.title", "ui.toast", "ui.confirm", "ui.resize",
     "device.preview",
     "backend.fetch"
   ],
-  "events": ["doc", "run", "theme"],
-  "errors": ["conflict", "invalid", "forbidden", "not_found", "too_big", "no_backend", "unknown_call", "failed"]
+  "events": ["doc", "run", "theme", "secret"],
+  "errors": ["conflict", "invalid", "forbidden", "not_found", "too_big", "no_backend", "unknown_call", "failed", "kind"],
+  "since": {
+    "2": {
+      "calls": ["secrets.connect"],
+      "events": ["secret"],
+      "errors": ["kind"],
+      "changed": {
+        "connect": "Takes {protocol}; answers with the agreed protocol.",
+        "secrets.status": "Each entry gains kind (value | oauth), label, help, last_used, and for oauth auth, multiple, scopes, granted_at and accounts [{account, scopes, granted_at, last_used}]. name, optional and set keep their meaning.",
+        "secrets.set": "A value only: on an oauth secret it fails with code kind.",
+        "secrets.clear": "A second argument, an account, disconnects that one account of a multiple oauth secret; without it the whole secret is cleared (an oauth secret is disconnected, and revoked at the provider)."
+      },
+      "secrets.connect": "secrets.connect(name, {account}?) -> {url}. For an oauth secret: the chrome starts the sign-in at top level itself (the frame never sees the provider's URL, code or state) and answers with url, a link on the hub that starts it again, for a page whose pop-up was blocked. The outcome comes as a secret event. On a value secret it fails with code kind.",
+      "secret": "{event: 'secret', name, ...that secret's status entry}: after a set, clear, connect or disconnect, from this tab or another."
+    }
+  }
 }
