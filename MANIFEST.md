@@ -201,8 +201,9 @@ The cloud hub runs each job on a throwaway Fly Machine made from the app's image
 - **Command:** `slowapp-remote job <name>`, in place of `job <name>` (so `init.cmd` on the
   Machines API, keeping the image's `ENTRYPOINT`). A kit app takes that argv itself and runs
   `job <name>` as a child of its own entrypoint. An image with no `ENTRYPOINT` runs
-  `/usr/local/bin/slowapp-remote`, which needs the app's command as `SLOWAPP_ENTRYPOINT` (a JSON
-  list, e.g. `["python3", "-m", "moon"]`); without either it exits 64.
+  `/usr/local/bin/slowapp-remote`, which needs the app's command as `SLOWAPP_ENTRYPOINT` (a
+  non-empty JSON list of strings, e.g. `["python3", "-m", "moon"]`); without either, or with a
+  `SLOWAPP_ENTRYPOINT` that isn't such a list, it exits 64.
 - **Environment:** everything a Podman run gets (`SLOWAPP_CONTRACT`, `SLOWAPP_APP`, `SLOWAPP_JOB`,
   `SLOWAPP_RUN_ID`, `SLOWAPP_REASON`, `SLOWAPP_NOW`/`FOR`/`DEADLINE`, `SLOWAPP_MODE`,
   `SLOWAPP_FEEDS`, `SLOWAPP_DEVICE`, `TZ`), plus:
@@ -212,10 +213,11 @@ The cloud hub runs each job on a throwaway Fly Machine made from the app's image
   | `SLOWAPP_REMOTE_IN` | required | Presigned GET of `in.tar`: what would be `/in`, relative names (`settings.json`, `docs/<name>.json`, …). |
   | `SLOWAPP_REMOTE_OUT` | required | Presigned PUT of `out.tar`: `/out` after the job. |
   | `SLOWAPP_REMOTE_LOG` | optional | Presigned PUT of the log: the run's stdout and stderr together, its last 64 KiB. |
-  | `SLOWAPP_REMOTE_DATA_GET` | if `data` | Presigned GET of the board's saved `/data` as `data.tar.gz`. A 404 means none yet: start empty. |
-  | `SLOWAPP_REMOTE_DATA_PUT` | if `data` | Presigned PUT of the new `data.tar.gz`. Both data links are left out when the app declares no `data`. |
+  | `SLOWAPP_REMOTE_DATA_GET` | if saved | Presigned GET of the board's saved `/data` as `data.tar.gz`. A 404 still means none yet (start empty); any other error, a 403 included, fails the run (exit 4). |
+  | `SLOWAPP_REMOTE_DATA_NEW` | if none saved | `1` when the hub knows the board has no saved `/data` yet, sent in place of `DATA_GET` (an S3 store without ListBucket answers a missing key with 403, so the hub decides, not the GET): `/data` starts empty. |
+  | `SLOWAPP_REMOTE_DATA_PUT` | if `data` | Presigned PUT of the new `data.tar.gz`, used only when `/data` came through `DATA_GET` or `DATA_NEW=1` was set. A `DATA_PUT` with neither isn't used (the log says so, `data.status` is `"none"`), so an empty `/data` never replaces saved data. All three are left out when the app declares no `data`. |
   | `SLOWAPP_REMOTE_DATA_MAX_MB` | optional | The manifest's `data.max_mb` (read from `/app/slowapp.toml` if unset). `/data` over it isn't uploaded: the old one stays. |
-  | `SLOWAPP_REMOTE_TIMEOUT_S` | optional | Kill the job child after this many seconds (exit 137) so the uploads still happen; set it a little under the machine's own stop. |
+  | `SLOWAPP_REMOTE_TIMEOUT_S` | optional | Kill the job child after this many seconds (exit 137) so the uploads still happen; set it a little under the machine's own stop. Unset, empty, 0 or less: no limit. Not a number: exit 64. |
 
   The job child gets none of the `SLOWAPP_REMOTE_*` variables. Its `SLOWAPP_IN`, `SLOWAPP_OUT`,
   `SLOWAPP_STATE` and `SLOWAPP_CACHE` point at fresh local directories (`/cache` starts empty and
@@ -224,25 +226,33 @@ The cloud hub runs each job on a throwaway Fly Machine made from the app's image
 - **Requests:** GETs follow redirects; PUTs send `Content-Length` (never chunked) and
   `Content-Type` `application/x-tar` (out), `application/gzip` (data) or `text/plain;
   charset=utf-8` (log), so sign only `host` or sign those. Each request has a 60 s timeout and is
-  tried 3 times (2 s, then 4 s apart) on a network error, 408, 429 or 5xx; other 4xx aren't retried.
+  tried 3 times (2 s, then 4 s apart) on a network error (a broken or cut-short response
+  included), 408, 429 or 5xx. Other 4xx, a link urllib can't use, a certificate that doesn't
+  verify and a local file error aren't retried.
 - **Archives:** an input archive is refused whole (nothing extracted) if any member has an
   absolute name or a `..`, is a device or fifo, or is a link that leaves the directory; then
   tarfile's `data` filter extracts it. `out.tar` and `data.tar.gz` hold directories and regular
   files under relative names; a symlink or special file the job made is left out and said in the
-  log.
+  log, and a file with several hard links goes in once per name, each a whole regular file.
 - **Order:** fetch `in.tar` and the data, run the job, then always try to upload: `/data` (every
   run the job ran, whatever its exit, as a board keeps `/data`; never when the inputs failed, so a
   failed fetch can't wipe the saved data), then `out.tar` with the kit's `.metrics.json` and
   `.remote.json`, then the log, last, so it says how the uploads went.
+- **Stopping:** on SIGTERM or SIGINT (the machine being stopped) the job child gets SIGTERM, then
+  SIGKILL 3 s later if it's still running; the uploads then run as usual and the machine exits
+  128 + the signal (143, 130), with `error` `"stopped by SIGTERM"` in `.remote.json`. A stop
+  during the input fetches means the job doesn't run. Give the machine a kill timeout long enough
+  for the uploads.
 - **`.remote.json`** (in `out.tar`): `{"job", "run_id", "job_exit", "exit_code", "duration_ms",
   "started_at", "ended_at", "error", "data", "uploads_failed"}`. `job_exit` is the job's own code
-  (`null` if it never ran), `exit_code` what the machine exits with, times are UTC RFC 3339,
+  (`null` if it never ran: an input failed, the command was bad, it couldn't be started), `exit_code` what the machine exits with, times are UTC RFC 3339,
   `data` is `{"status": "none" | "saved" | "over_cap" | "failed", "loaded", "bytes", "max_mb"}`
   and `uploads_failed` lists `"data"` (and in the log, `"out"`).
 - **Exit codes:** the job's own (0, 3, 4, 5, 64, 137, …), except **4** when an input fetch failed
   or an input archive was refused (the job didn't run), **4** when the job ran but `/data` or
-  `out.tar` didn't upload (the log and `.remote.json` say which), and **64** for a bad command or
-  missing links. A failed log upload changes nothing: it shows in the machine's own log.
+  `out.tar` didn't upload (the log and `.remote.json` say which), **64** for a bad command
+  (`SLOWAPP_ENTRYPOINT` included, or one that couldn't be started), a bad `SLOWAPP_REMOTE_TIMEOUT_S`
+  or missing links, and **143** / **130** when the machine was stopped (SIGTERM / SIGINT). A failed log upload changes nothing: it shows in the machine's own log.
 
 ## Fixture mode
 

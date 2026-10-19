@@ -27,6 +27,7 @@ import traceback
 from . import metrics, net, uilog
 from .context import Context
 from .errors import EXIT_CONTRACT, EXIT_OK, ContractError, JobExit
+from .remote import parse_entrypoint
 
 JOBS = {}
 LOCK_PATH = os.environ.get("SLOWAPP_JOB_LOCK", "/tmp/.sb-job.lock")
@@ -84,9 +85,10 @@ class job_lock:
 
 
 def entrypoint():
-    """argv that starts this app again: SLOWAPP_ENTRYPOINT (JSON list) or how we were launched."""
+    """argv that starts this app again: SLOWAPP_ENTRYPOINT (a JSON list of strings; ContractError
+    if it isn't one) or how we were launched."""
     if os.environ.get("SLOWAPP_ENTRYPOINT"):
-        return json.loads(os.environ["SLOWAPP_ENTRYPOINT"])
+        return parse_entrypoint(os.environ["SLOWAPP_ENTRYPOINT"])
     spec = getattr(sys.modules["__main__"], "__spec__", None)
     if spec is not None and spec.name:
         return [sys.executable, "-m", spec.name.removesuffix(".__main__")]
@@ -96,6 +98,10 @@ def entrypoint():
 def run_in_child(name, env=None, out=None, events_body=None, timeout=None):
     """Run a job as a child process (the HTTP transport): the app's own entrypoint with
     `job <name>`, so the UI never holds the job's heap. Returns (exit code, message)."""
+    try:
+        cmd = entrypoint() + ["job", name]
+    except ContractError as e:
+        return EXIT_CONTRACT, str(e)
     child_env = dict(os.environ, **(env or {}))
     if out:
         child_env["SLOWAPP_OUT"] = os.fspath(out)
@@ -110,7 +116,7 @@ def run_in_child(name, env=None, out=None, events_body=None, timeout=None):
         with job_lock(inherit=True):
             child_env.update(SLOWAPP_JOB_LOCK_HELD="1", SLOWAPP_TRANSPORT="http")
             ring = uilog.active()
-            p = subprocess.Popen(entrypoint() + ["job", name], env=child_env, stdin=subprocess.DEVNULL,
+            p = subprocess.Popen(cmd, env=child_env, stdin=subprocess.DEVNULL,
                                  stderr=subprocess.PIPE if ring else None)
             pumping = uilog.pump(p.stderr) if ring else None
             try:
@@ -140,8 +146,9 @@ def main(argv=None):
         # The cloud hub's command: this image's own entrypoint, `slowapp-remote job <name>`. The
         # wrapper fetches /in and /data, runs `job <name>` as a child of the same entrypoint and
         # uploads what it made (remote.py).
+        # A SLOWAPP_ENTRYPOINT is left to the wrapper to check, so a bad one exits 64 with a report.
         from . import remote
-        sys.exit(remote.run(argv[1:], entry=entrypoint()))
+        sys.exit(remote.run(argv[1:], entry=None if os.environ.get("SLOWAPP_ENTRYPOINT") else entrypoint()))
     if argv[:1] == ["job"] and len(argv) == 2:
         try:
             ctx = Context.from_env(job=argv[1])
