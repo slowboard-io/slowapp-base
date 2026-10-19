@@ -3,7 +3,14 @@
 Base image releases (`vX.Y.Z` tags; README, "Versions"). Earlier releases are in the GitHub
 release notes.
 
-## Unreleased (1.4.0)
+## 1.4.1
+
+- `check_inks` (so `encode_png`, `to_grey`, `codes`) asks PIL's `getcolors` for just past the ink
+  set's colours instead of 2^24. PIL sizes its table by that limit, so the old call took hundreds
+  of MB and raised MemoryError on a 512 MB cloud-hub run machine. A picture with more colours than
+  the inks is still an `InkError`. The SDK's catalog `inks()` likewise asks for 64.
+
+## 1.4.0
 
 - **`slowapp-remote`: a job run from presigned links**, for the cloud hub's Fly Machines. The
   machine's command is `slowapp-remote job <name>`; the wrapper fetches `in.tar` and the board's

@@ -60,6 +60,15 @@ class Inks(unittest.TestCase):
         with self.assertRaises(kit.InkError):
             kit.check_inks(img)
 
+    def test_a_many_coloured_picture_raises_without_a_big_table(self):
+        from PIL import Image
+        img = Image.new("RGB", (64, 64))
+        img.putdata([(i % 256, i // 256, 7) for i in range(64 * 64)])
+        with self.assertRaises(kit.InkError):
+            kit.check_inks(img)
+        with self.assertRaises(kit.InkError):
+            kit.check_inks(img, "g16")
+
     def test_encoded_png_meets_the_bundle_rules(self):
         data = kit.encode_png(drawn())
         self.assertEqual(data[24], 2, "bit depth 2")

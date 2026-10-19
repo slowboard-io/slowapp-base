@@ -75,7 +75,11 @@ def save_png(img, path, ink_set="k4"):
 def inks(img, ink_set="k4"):
     """The inks a screen uses. Only a g16 screen has greys; any other colour is an error."""
     used = set()
-    for _, c in img.convert("RGB").getcolors(1 << 16):
+    # A small table (PIL sizes it by maxcolors); past 64 colours it can't be one ink set.
+    counts = img.convert("RGB").getcolors(64)
+    if counts is None:
+        raise ValueError(f"more than 64 colours: not a {ink_set} screen")
+    for _, c in counts:
         name = INK_NAMES.get(c)
         if name is None and ink_set == "g16" and c[0] == c[1] == c[2] and c[0] % 17 == 0:
             name = "grey"
