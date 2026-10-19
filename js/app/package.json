@@ -1,7 +1,7 @@
 {
   "name": "@slowboard/app",
   "version": "0.1.0",
-  "description": "The bridge between a Slowboard app's UI and its hub: docs, settings, secrets, jobs and the hub's chrome, over a MessagePort (protocol 1).",
+  "description": "The bridge between a Slowboard app's UI and its hub: docs, settings, secrets, jobs and the hub's chrome, over a MessagePort (protocol 2).",
   "type": "module",
   "exports": {
     ".": {

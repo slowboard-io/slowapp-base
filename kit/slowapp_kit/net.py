@@ -15,7 +15,9 @@ import os
 import socket
 import urllib.error
 import urllib.request
+from datetime import timedelta
 
+from . import manifest as mf
 from .errors import ContractError, NeedsConfig, Transient, Unchanged
 from .output import atomic_write
 
@@ -23,8 +25,11 @@ DEADLINE_MARGIN_S = 5        # leave this long to draw and write after the last 
 
 
 def secret(ctx, name, optional=False):
-    """A podman secret from /run/secrets/<name>. In fixture mode no secrets are mounted, so it
-    returns a placeholder; missing in live mode means exit 5 (needs config), unless optional."""
+    """A value secret from /run/secrets/<name>. In fixture mode no secrets are mounted, so it
+    returns a placeholder; missing in live mode means exit 5 (needs config), unless optional.
+    An oauth secret (contract 6) is read with token()."""
+    if mf.secret_decl(ctx.manifest, name).get("kind") == "oauth":
+        raise ContractError(f"secret {name!r} is kind = \"oauth\": read it with token({name!r})")
     if ctx.fixture:
         return f"fixture-{name}"
     try:
@@ -33,6 +38,57 @@ def secret(ctx, name, optional=False):
         if optional:
             return None
         raise NeedsConfig(f"secret {name!r} is not set (slowbhub app secret set {ctx.app} {name})")
+
+
+def _token_file(path, account=None):
+    try:
+        tok = json.loads(path.read_text())
+    except ValueError as e:
+        raise ContractError(f"{path.name}: not a token file ({e})")
+    if not isinstance(tok, dict) or not isinstance(tok.get("access_token"), str):
+        raise ContractError(f"{path.name}: a token file is {{access_token, expires_at, scopes}}")
+    if account is not None:
+        tok.setdefault("account", account)
+    return tok
+
+
+def token(ctx, name, optional=None):
+    """Contract 6: an oauth secret's access token, as the hub wrote it for this sync run.
+
+    One account: /run/secrets/<name>.json, returned as a dict {access_token, expires_at (RFC 3339),
+    scopes, ...}. `multiple = true`: /run/secrets/<name>/<account>.json, returned as a list of those
+    dicts, each with its "account", sorted by account. The token lasts about an hour from the
+    run's start.
+
+    Missing (or no accounts) means exit 5 (needs config: connect it on the app's page), unless the
+    secret is optional (the manifest's `optional`, or optional=True here): then None, or [].
+    In fixture mode, a placeholder: access_token "fixture-<name>", the provider's scopes, and for
+    `multiple` one account, "fixture"."""
+    decl = mf.secret_decl(ctx.manifest, name)
+    if decl and decl.get("kind") != "oauth":
+        raise ContractError(f"secret {name!r} is a value: read it with secret({name!r})")
+    if optional is None:
+        optional = bool(decl.get("optional"))
+    single, many = ctx.secrets_dir / f"{name}.json", ctx.secrets_dir / name
+    multiple = decl.get("multiple")
+    if ctx.fixture:
+        scopes = (ctx.manifest.get("auth") or {}).get(decl.get("auth"), {}).get("scopes", [])
+        tok = {"access_token": f"fixture-{name}", "expires_at": (ctx.now + timedelta(hours=1)).isoformat(timespec="seconds"),
+               "scopes": list(scopes)}
+        return [dict(tok, account="fixture")] if multiple else tok
+    if multiple is None:                      # no [secrets] table: go by what the hub mounted
+        multiple = many.is_dir() and not single.exists()
+    if multiple:
+        files = sorted(many.glob("*.json")) if many.is_dir() else []
+        toks = [_token_file(f, f.stem) for f in files if not f.name.startswith(".")]
+        if not toks and not optional:
+            raise NeedsConfig(f"secret {name!r}: no account is connected (connect one on the app's page)")
+        return toks
+    if not single.is_file():
+        if optional:
+            return None
+        raise NeedsConfig(f"secret {name!r} is not connected (connect it on the app's page)")
+    return _token_file(single)
 
 
 def http_get(ctx, url, timeout=60, headers=None):

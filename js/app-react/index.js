@@ -129,20 +129,28 @@ export function useSettings() {
   return [values, save, { schema: app.info.settings_schema || {}, ...status }];
 }
 
-/** Which secrets are set (never their values), and set/clear: {status, set, clear, busy}. */
+/**
+ * Which secrets are set (never their values), and set/clear/connect: {status, set, clear, connect,
+ * busy}. Protocol 2: status follows `secret` events (a sign-in finishing, another tab), and
+ * connect(name) starts an oauth sign-in (the outcome arrives as one of those events).
+ */
 export function useSecrets() {
   const app = useApp();
   const [status, setStatus] = useState(app.info.secrets || []);
   const [busy, setBusy] = useState(false);
+  useEffect(() => app.secrets.watch?.(({ event, ...s }) => {
+    setStatus((p) => (p.some((x) => x.name === s.name) ? p.map((x) => (x.name === s.name ? s : x)) : [...p, s]));
+  }), [app]);
   const wrap = (f) => async (...a) => {
     setBusy(true);
-    try { await f(...a); setStatus(await app.secrets.status()); } finally { setBusy(false); }
+    try { const r = await f(...a); setStatus(await app.secrets.status()); return r; } finally { setBusy(false); }
   };
   return {
     status,
     isSet: (name) => status.some((s) => s.name === name && s.set),
     set: useCallback(wrap(app.secrets.set), [app]), // eslint-disable-line react-hooks/exhaustive-deps
     clear: useCallback(wrap(app.secrets.clear), [app]), // eslint-disable-line react-hooks/exhaustive-deps
+    connect: useCallback(wrap(app.secrets.connect), [app]), // eslint-disable-line react-hooks/exhaustive-deps
     busy,
   };
 }

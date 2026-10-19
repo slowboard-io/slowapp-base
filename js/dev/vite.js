@@ -11,7 +11,10 @@
 //   only in memory, until the server stops). Jobs run for real when `job` names the app's command (it gets
 //   `job <name>`, SLOWAPP_IN/OUT/STATE/SECRETS on temp dirs, /in/args.json and /in/docs), or
 //   through slowapp.dev.js (`export const jobs = {name: async ({args, docs, settings}) =>
-//   ({result, docs})}`), or not at all.
+//   ({result, docs})}`), or not at all. Contract 6: each job gets only its own secrets (an oauth
+//   one as a dev token file), render has no network, and a sync job's /out/artifacts is kept in
+//   .slowapp/artifacts and handed to the next render as /in/artifacts. An oauth sign-in is faked:
+//   secrets.connect opens /__slowboard/connect/<name>, which connects dev@example.com.
 
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -22,7 +25,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { parse as parseToml } from "smol-toml";
 import { viteSingleFile } from "vite-plugin-singlefile";
 
-import { HubError, MockHub } from "./hub.js";
+import { HubError, MockHub, jobSpec } from "./hub.js";
 
 export const MAX_BUNDLE = 2 * 1024 * 1024;
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -86,13 +89,38 @@ function readJson(f, fallback) {
   try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch { return fallback; }
 }
 
+/** /run/secrets as a job sees it: values as <name>, oauth tokens as <name>.json or <name>/<account>.json. */
+export function writeSecrets(dir, secrets = {}, tokens = {}) {
+  for (const [n, v] of Object.entries(secrets)) if (v != null) fs.writeFileSync(path.join(dir, n), v, { mode: 0o600 });
+  for (const [n, tok] of Object.entries(tokens)) {
+    if (Array.isArray(tok)) {
+      fs.mkdirSync(path.join(dir, n));
+      for (const { account, ...t } of tok) fs.writeFileSync(path.join(dir, n, `${account}.json`), JSON.stringify(t), { mode: 0o600 });
+    } else fs.writeFileSync(path.join(dir, `${n}.json`), JSON.stringify(tok), { mode: 0o600 });
+  }
+}
+
+/** A sync run's /out/artifacts replaces each artifact it wrote, whole, in `keep`. */
+export function keepArtifacts(out, keep) {
+  const src = path.join(out, "artifacts");
+  if (!fs.existsSync(src)) return [];
+  const names = fs.readdirSync(src).filter((n) => fs.statSync(path.join(src, n)).isDirectory());
+  for (const n of names) {
+    fs.rmSync(path.join(keep, n), { recursive: true, force: true });
+    fs.cpSync(path.join(src, n), path.join(keep, n), { recursive: true });
+  }
+  return names;
+}
+
 /**
  * Run one job as the hub would (contract 4 paths, on temp dirs): the app's command on this
  * machine (`cmd`), or its image under docker/podman (`image`, mounted like the hub's §8.3:
- * /in ro, /out, /data, /run/secrets ro; no network unless the manifest says egress).
+ * /in ro, /out, /data, /run/secrets ro; no network unless the job may have it, jobSpec).
  */
-export function commandRunner({ cmd, image, engine = "docker", cwd, manifestPath, manifest, env = {}, stateDir }) {
-  return (name, { args, docs, settings, secrets, reason }) => new Promise((resolve) => {
+export function commandRunner({ cmd, image, engine = "docker", cwd, manifestPath, manifest, env = {}, stateDir, artifactsDir }) {
+  artifactsDir ||= path.join(path.dirname(stateDir), "artifacts");
+  return (name, { args, docs, settings, secrets, tokens, spec, reason }) => new Promise((resolve) => {
+    spec ||= jobSpec(manifest, name);
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "slowapp-dev-"));
     const [inp, out, sec] = ["in", "out", "secrets"].map((d) => path.join(tmp, d));
     fs.mkdirSync(path.join(inp, "docs"), { recursive: true });
@@ -102,7 +130,8 @@ export function commandRunner({ cmd, image, engine = "docker", cwd, manifestPath
     fs.writeFileSync(path.join(inp, "args.json"), JSON.stringify(args || {}));
     fs.writeFileSync(path.join(inp, "settings.json"), JSON.stringify(settings || {}));
     for (const [n, v] of Object.entries(docs || {})) fs.writeFileSync(path.join(inp, "docs", `${n}.json`), JSON.stringify(v));
-    for (const [n, v] of Object.entries(secrets || {})) if (v != null) fs.writeFileSync(path.join(sec, n), v, { mode: 0o600 });
+    writeSecrets(sec, secrets, tokens);
+    if (spec.kind === "render" && fs.existsSync(artifactsDir)) fs.cpSync(artifactsDir, path.join(inp, "artifacts"), { recursive: true });
     const run = {
       SLOWAPP_CONTRACT: String(manifest.app?.contract ?? 4), SLOWAPP_APP: manifest.app?.id || "app",
       SLOWAPP_JOB: name, SLOWAPP_RUN_ID: `r_dev_${Date.now()}`, SLOWAPP_REASON: reason || "manual",
@@ -112,7 +141,7 @@ export function commandRunner({ cmd, image, engine = "docker", cwd, manifestPath
     if (image) {
       fs.chmodSync(out, 0o777);
       fs.chmodSync(stateDir, 0o777); // /data, as /out: the image's user isn't this one
-      const net = manifest.app?.network === "egress" ? [] : ["--network", "none"];
+      const net = spec.network === "egress" ? [] : ["--network", "none"];
       argv = [engine, "run", "--rm", "--read-only", "--tmpfs", "/tmp", ...net,
         "-v", `${inp}:/in:ro`, "-v", `${out}:/out`, "-v", `${path.resolve(stateDir)}:/data`, "-v", `${sec}:/run/secrets:ro`,
         ...Object.entries({ ...run, ...env, SLOWAPP_STATE: "/data" }).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
@@ -138,6 +167,7 @@ export function commandRunner({ cmd, image, engine = "docker", cwd, manifestPath
       }
       const result = readJson(path.join(out, "result.json"), null);
       const feeds = fs.existsSync(path.join(out, "feeds")) && fs.readdirSync(path.join(out, "feeds")).length > 0;
+      if (code === 0 && spec.kind !== "render") keepArtifacts(out, artifactsDir);
       fs.rmSync(tmp, { recursive: true, force: true });
       if (log.trim()) process.stderr.write(`[slowapp dev] ${name}: ${log.trim()}\n`);
       resolve({ exit: code ?? 1, result, docs: outDocs, log, feeds });
@@ -229,6 +259,21 @@ export function slowboard(opts = {}) {
           if (!fs.existsSync(f)) { res.statusCode = 404; return res.end(); }
           res.setHeader("content-type", "image/png");
           return res.end(fs.readFileSync(f));
+        }
+        // The faked provider: a sign-in the chrome opened for secrets.connect.
+        const signIn = url.match(/^\/__slowboard\/connect\/([^/]+)$/);
+        if (signIn && req.method === "GET") {
+          const name = decodeURIComponent(signIn[1]);
+          const account = new URL(req.url, "http://x").searchParams.get("account") || undefined;
+          res.setHeader("content-type", "text/html; charset=utf-8");
+          try {
+            const s = hub.completeConnect(name, account);
+            const esc = (v) => String(v).replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
+            return res.end(`<!doctype html><meta charset="utf-8"><title>Connected</title><p>slowapp dev: <b>${esc(name)}</b> is connected as ${esc(s.accounts.at(-1)?.account)} (faked: no provider was asked). You can close this tab.</p>`);
+          } catch (e) {
+            res.statusCode = 400;
+            return res.end(String(e.message).replace(/[&<>"]/g, ""));
+          }
         }
         if (url === "/__slowboard/call" && req.method === "POST") {
           let body = "";

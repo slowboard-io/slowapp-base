@@ -4,6 +4,7 @@ Every path can be moved with an environment variable so an app can run outside a
 the HostRunner in P2): SLOWAPP_STATE (/data), SLOWAPP_OUT (/out), SLOWAPP_IN (/in), SLOWAPP_SECRETS
 (/run/secrets), SLOWAPP_CACHE (/cache), SLOWAPP_MANIFEST (/app/slowapp.toml).
 """
+import hashlib
 import json
 import os
 import re
@@ -15,10 +16,11 @@ from zoneinfo import ZoneInfo
 
 from PIL import Image
 
+from . import manifest as mf
 from .errors import ContractError
 from .inks import INK_SETS, WHITE
 
-CONTRACTS = ("3", "4", "5")
+CONTRACTS = ("3", "4", "5", "6")
 DOC_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 SURFACE_RE = re.compile(r"^(\d{1,4})x(\d{1,4})\.([a-z0-9]+)$")
 
@@ -120,7 +122,7 @@ class Context:
     def from_env(cls, job=None, env=None, out=None):
         env = os.environ if env is None else env
         if env.get("SLOWAPP_CONTRACT", "4") not in CONTRACTS:
-            raise ContractError(f"SLOWAPP_CONTRACT={env['SLOWAPP_CONTRACT']}: this kit speaks contracts 3 to 5")
+            raise ContractError(f"SLOWAPP_CONTRACT={env['SLOWAPP_CONTRACT']}: this kit speaks contracts 3 to 6")
         tz = ZoneInfo(env.get("TZ") or "America/Vancouver")
         mode = env.get("SLOWAPP_MODE", "live")
         if mode not in ("live", "fixture"):
@@ -217,6 +219,40 @@ class Context:
         if text.startswith("["):
             return json.loads(text)
         return [json.loads(line) for line in text.splitlines() if line.strip()]
+
+    # ------------------------------------------------------------ contract 6: kinds and artifacts
+
+    @property
+    def kind(self):
+        """This job's kind from the manifest: "sync" or "render" (contract 6), None before."""
+        return mf.job_spec(self.manifest, self.job)["kind"]
+
+    def artifact(self, name):
+        """Contract 6, render: the directory a sync job wrote as artifact `name`
+        (/in/artifacts/<name>/), or None if the hub has none yet. In fixture mode, a fixture's
+        artifacts/<name>/ (so /data/artifacts/<name>/) stands in when /in has none."""
+        if not mf.ARTIFACT_RE.match(name):
+            raise ContractError(f"artifact name {name!r}")
+        for d in [self.inp / "artifacts" / name] + ([self.data / "artifacts" / name] if self.fixture else []):
+            if d.is_dir():
+                return d
+        return None
+
+    def read_artifact(self, name, file, default=None):
+        """One file of artifact `name`: parsed JSON for a .json name, bytes otherwise; `default`
+        when the artifact or the file is missing. What it read counts towards
+        exit_if_unchanged, as a fetch does."""
+        if "/" in file or file.startswith("."):
+            raise ContractError(f"artifact file name {file!r}")
+        d = self.artifact(name)
+        try:
+            data = (d / file).read_bytes() if d else None
+        except FileNotFoundError:
+            data = None
+        if data is None:
+            return default
+        self._fetched[f"artifact:{name}/{file}"] = hashlib.sha256(data).hexdigest()
+        return json.loads(data) if file.endswith(".json") else data
 
     # ------------------------------------------------------------ drawing
 

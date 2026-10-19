@@ -16,3 +16,4 @@ export declare function ListItem(p: ComponentPropsWithoutRef<"li">): ReactNode;
 export declare function KeyCap(p: ComponentPropsWithoutRef<"span"> & { ink: "red" | "yellow" | "black" | "white" }): ReactNode;
 export declare function Num(p: ComponentPropsWithoutRef<"span">): ReactNode;
 export declare function Notice(p: ComponentPropsWithoutRef<"p"> & { tone?: "bad" }): ReactNode;
+export { SbConnect, SbSecretField, setApp } from "./secrets.js";

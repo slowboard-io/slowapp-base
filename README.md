@@ -16,8 +16,8 @@ contract's design live in [epaper-dashboard](https://github.com/mike-anderson/ep
   runs both kinds of app stores the slim layers once.
 - **Platforms:** `linux/arm/v7` (the Lyra), `linux/arm64`, `linux/amd64`. The libraries come from
   Debian's packages, because PyPI has few 32-bit ARM wheels.
-- **Contract:** label `org.slowboard.contract=4`, and `SLOWAPP_CONTRACT=4` in the environment
-  (the hub sets each job's to its own app's). The kit runs contract 3 and 4 apps.
+- **Contract:** label `org.slowboard.contract=6`, and `SLOWAPP_CONTRACT=6` in the environment
+  (the hub sets each job's to its own app's). The kit runs contract 3 to 6 apps.
 
 ### Versions
 
@@ -27,7 +27,8 @@ no `latest`.
 - **Patch:** a rebuild or a fix. The monthly `rebuild` workflow cuts one, so Debian security
   updates land without anyone remembering to.
 - **Minor:** something added to the kit or SDK, or a new library in an image.
-- **Major:** a contract change (a new `contract` number in the manifest).
+- **Major:** a contract change that breaks apps written to an older one. A new `contract` number
+  that keeps the older ones working (4, 5 and 6 did) is a minor release.
 
 Apps pin a tag and a digest in their Dockerfile, and Dependabot opens the bump PR:
 
@@ -80,14 +81,14 @@ Set `SLOWAPP_PLATFORM=linux/arm/v7` to run the board's image under QEMU.
 
 An app can ship a UI: one HTML file the hub shows at `/apps/<id>` in a sandboxed frame, with no
 network of its own. It reaches the hub over a MessagePort through `@slowboard/app` (the bridge,
-protocol 1: [`js/app/protocol.json`](js/app/protocol.json)). Editing docs and settings, storing a
+protocol 2: [`js/app/protocol.json`](js/app/protocol.json); protocol 1 bundles keep working). Editing docs and settings, storing a
 secret and reading the panel's picture start no container; `jobs.run` runs one of the app's jobs.
 
 | Package | What |
 |---|---|
 | [`@slowboard/app`](js/app) | The bridge client: `connect()`, then `app.docs`, `app.settings`, `app.secrets`, `app.jobs.run`, `app.events`, `app.ui` (title, toast, confirm, autoResize), `app.device.preview`, the hub's theme. No dependencies. |
 | [`@slowboard/app-react`](js/app-react) | `<AppProvider>` and hooks: `useDoc`, `useSettings`, `useSecrets`, `useJob`, `useRuns`, `useTheme`. |
-| [`@slowboard/ui`](js/ui) | React components in the hub's look (slowboard.io's tokens and fonts): `Card`, `Button`, `Field`, `TextInput`, `Toggle`, `Segmented`, `List`, `KeyCap`, `Notice`… |
+| [`@slowboard/ui`](js/ui) | React components in the hub's look (slowboard.io's tokens and fonts): `Card`, `Button`, `Field`, `TextInput`, `Toggle`, `Segmented`, `List`, `KeyCap`, `Notice`…; and, framework-free, `<sb-secret-field>` and `<sb-connect>` for taking secrets in (`@slowboard/ui/secrets`). |
 | [`@slowboard/dev`](js/dev) | The Vite plugin (one self-contained `index.html`, refused over 2 MB) and `slowapp dev`. |
 | [`@slowboard/elements`](js/elements) | The app sheet as custom elements (`<slowapp-sheet>` and its parts) from a catalog bundle, shared by slowboard.io and the hub. |
 

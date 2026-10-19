@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/mike-anderson/epaper-dashboard/panes/schema/slowapp.schema.json",
-  "title": "Slowapp manifest (contracts 3 and 4)",
+  "title": "Slowapp manifest (contracts 3 to 6)",
   "description": "slowapp.toml at an app repo's root, parsed as TOML. See MANIFEST.md. Structural rules only; `slowapp validate` adds the cross-field rules.",
   "type": "object",
   "required": ["app"],
@@ -14,7 +14,7 @@
       "properties": {
         "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,23}$"},
         "title": {"type": "string", "minLength": 1, "maxLength": 40},
-        "contract": {"enum": [3, 4, 5]},
+        "contract": {"enum": [3, 4, 5, 6]},
         "image": {"type": "string", "pattern": "^[a-z0-9.-]+(:[0-9]+)?(/[a-z0-9._-]+)+$"},
         "memory": {"$ref": "#/$defs/size"},
         "tmp": {"$ref": "#/$defs/size"},
@@ -69,6 +69,27 @@
         }
       }
     },
+    "secrets": {
+      "description": "Contract 6: the app's secrets, each a value or an OAuth sign-in. A job gets only the ones its [[job]] secrets names.",
+      "type": "object",
+      "propertyNames": {"pattern": "^[a-z][a-z0-9_-]{0,31}$"},
+      "additionalProperties": {"$ref": "#/$defs/secret"}
+    },
+    "auth": {
+      "description": "Contract 6: OAuth providers an oauth secret signs in with. The hub holds the client; the manifest only says where and what to ask for.",
+      "type": "object",
+      "propertyNames": {"pattern": "^[a-z][a-z0-9_-]{0,31}$"},
+      "additionalProperties": {"$ref": "#/$defs/auth"}
+    },
+    "artifacts": {
+      "description": "Contract 6: what sync jobs write to /out/artifacts/<name>/ and render reads at /in/artifacts/<name>/.",
+      "type": "object",
+      "propertyNames": {"pattern": "^[a-z][a-z0-9_-]{0,31}$"},
+      "additionalProperties": {
+        "type": "object", "required": ["max_kb"], "additionalProperties": false,
+        "properties": {"max_kb": {"type": "integer", "minimum": 1, "maximum": 65536}}
+      }
+    },
     "events": {
       "type": "object", "additionalProperties": false,
       "properties": {"accept": {"$ref": "#/$defs/names"}}
@@ -79,7 +100,11 @@
         "type": "object", "required": ["name"], "additionalProperties": false,
         "properties": {
           "name": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,31}$"},
+          "kind": {"enum": ["sync", "render"]},
+          "network": {"enum": ["none", "egress"]},
+          "secrets": {"$ref": "#/$defs/names"},
           "every": {"type": "string", "pattern": "^[1-9][0-9]*(m|h)$"},
+          "min_every": {"type": "string", "pattern": "^[1-9][0-9]*(m|h)$"},
           "jitter_s": {"type": "integer", "minimum": 0, "maximum": 3600},
           "daily": {"type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"},
           "inputs": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^(self|[a-z][a-z0-9-]{1,23}):[a-z][a-z0-9_-]{0,31}$"}},
@@ -132,6 +157,34 @@
   },
   "$defs": {
     "size": {"type": "string", "pattern": "^[1-9][0-9]*[kmg]$"},
+    "https": {"type": "string", "maxLength": 512, "pattern": "^https://[^/\\s?#][^\\s#]*$"},
+    "secret": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "kind": {"enum": ["value", "oauth"]},
+        "label": {"type": "string", "minLength": 1, "maxLength": 60},
+        "help": {"type": "string", "maxLength": 400},
+        "optional": {"type": "boolean"},
+        "auth": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,31}$"},
+        "multiple": {"type": "boolean"}
+      }
+    },
+    "auth": {
+      "type": "object", "required": ["authorize_url", "token_url"], "additionalProperties": false,
+      "properties": {
+        "label": {"type": "string", "minLength": 1, "maxLength": 60},
+        "authorize_url": {"$ref": "#/$defs/https"},
+        "token_url": {"$ref": "#/$defs/https"},
+        "revoke_url": {"$ref": "#/$defs/https"},
+        "scopes": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^\\S{1,200}$"}},
+        "pkce": {"type": "boolean"},
+        "params": {
+          "type": "object",
+          "propertyNames": {"pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,63}$"},
+          "additionalProperties": {"type": "string", "maxLength": 200}
+        }
+      }
+    },
     "names": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,31}$"}},
     "setting": {
       "type": "object", "required": ["type"], "additionalProperties": false,

@@ -24,7 +24,7 @@ import tempfile
 import time
 import traceback
 
-from . import metrics, net, uilog
+from . import metrics, net, output, uilog
 from .context import Context
 from .errors import EXIT_CONTRACT, EXIT_OK, ContractError, JobExit
 from .remote import parse_entrypoint
@@ -54,6 +54,7 @@ def execute(name, ctx, transport="cli"):
         if fn is None:
             raise ContractError(f"no job {name!r} (have: {', '.join(sorted(JOBS)) or 'none'})")
         fn(ctx)
+        output.check_artifacts(ctx)
         net.remember(ctx)
     except JobExit as e:
         code, msg = e.code, str(e) or type(e).__name__

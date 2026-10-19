@@ -4,6 +4,7 @@ so an app can't hand the hub something it will reject.
   /out/feeds/<feed>/deck.json + cards/<id>.png
   /out/prompts.json + prompts/<instance>/<binding>.png      (prompts grant)
   /out/summary.json, /out/cache_key, /out/timing.json
+  /out/artifacts/<name>/...                                 (contract 6, sync jobs)
 """
 import json
 import os
@@ -13,6 +14,7 @@ from datetime import datetime, timedelta
 
 from PIL import Image
 
+from . import manifest as mf
 from .context import DOC_NAME_RE
 from .errors import ContractError
 from .inks import InkError, encode_png
@@ -191,6 +193,56 @@ def write_result(ctx, value):
     if len(data.encode()) > 256 * 1024:
         raise ContractError(f"result.json is {len(data.encode())} bytes, over 256 KiB")
     atomic_write(ctx.out / "result.json", data)
+
+
+def artifact_dir(ctx, name):
+    """Contract 6, sync jobs: the directory to write artifact `name` into, /out/artifacts/<name>/
+    (made empty-handed if it isn't there). Render reads it next at /in/artifacts/<name>/. The
+    artifact must be declared in [artifacts]; its files add up to at most its max_kb, checked
+    when the job ends."""
+    if not mf.ARTIFACT_RE.match(name):
+        raise ContractError(f"artifact name {name!r}")
+    declared = ctx.manifest.get("artifacts")
+    if declared is not None and name not in declared:
+        raise ContractError(f"artifact {name!r} isn't declared in [artifacts]")
+    if ctx.kind == "render":
+        raise ContractError(f"job {ctx.job} is a render job: only sync jobs write artifacts")
+    d = ctx.out / "artifacts" / name
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def write_artifact(ctx, name, file, value):
+    """Contract 6, sync jobs: one file of artifact `name`. A .json name takes any JSON value
+    (written compact with sorted keys, so the same data hashes the same and render isn't re-run
+    for nothing); otherwise bytes or str."""
+    if "/" in file or file.startswith(".") or not file:
+        raise ContractError(f"artifact file name {file!r}")
+    if file.endswith(".json") and not isinstance(value, (bytes, bytearray)):
+        data = json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=_default) + "\n"
+    elif isinstance(value, (bytes, bytearray, str)):
+        data = value
+    else:
+        raise ContractError(f"artifact {name}/{file}: bytes, str, or JSON for a .json name")
+    atomic_write(artifact_dir(ctx, name) / file, data)
+
+
+def check_artifacts(ctx):
+    """After a job: each artifact in /out/artifacts is declared (when the manifest has
+    [artifacts]) and within its max_kb."""
+    root = ctx.out / "artifacts"
+    if not root.is_dir():
+        return
+    declared = ctx.manifest.get("artifacts")
+    for d in sorted(root.iterdir()):
+        if not d.is_dir():
+            raise ContractError(f"artifacts/{d.name}: an artifact is a directory")
+        if declared is not None and d.name not in declared:
+            raise ContractError(f"artifact {d.name!r} isn't declared in [artifacts]")
+        size = sum(f.stat().st_size for f in d.rglob("*") if f.is_file() and not f.is_symlink())
+        cap = (declared or {}).get(d.name, {}).get("max_kb")
+        if cap is not None and size > cap * 1024:
+            raise ContractError(f"artifact {d.name} is {size} bytes, over its max_kb ({cap} KiB)")
 
 
 def write_cache_key(ctx, key):

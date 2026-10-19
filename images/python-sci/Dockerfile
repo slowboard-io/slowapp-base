@@ -24,4 +24,4 @@ LABEL org.opencontainers.image.title="slowapp-python-sci" \
       org.opencontainers.image.description="Slowapp base: slowapp-python plus numpy, SciPy, Shapely, contourpy, tifffile" \
       org.opencontainers.image.source="https://github.com/mike-anderson/slowapp-base" \
       org.opencontainers.image.version="${VERSION}" \
-      org.slowboard.contract="4"
+      org.slowboard.contract="6"

@@ -138,7 +138,7 @@ class Rules(unittest.TestCase):
 
     def test_structure(self):
         self.bad(CALENDAR.replace('network = "egress"', 'network = "lan"'), "not one of")
-        self.bad(CALENDAR.replace('contract = 3', 'contract = 2'), "not one of [3, 4, 5]")
+        self.bad(CALENDAR.replace('contract = 3', 'contract = 2'), "not one of [3, 4, 5, 6]")
         self.bad(CALENDAR.replace('memory = "96m"', 'memory = "96MB"'), "doesn't match")
         self.bad(CALENDAR.replace('title = "Calendar"\n', ''), "missing 'title'")
         self.bad(CALENDAR + "\n[extra]\nx = 1\n", "unknown key 'extra'")
@@ -214,6 +214,143 @@ class Contract5(unittest.TestCase):
         self.bad(CALENDAR5.replace('inks = ["g16"]', "inks = []"), "at least 1")
         self.bad(CALENDAR5.replace('sleep = "1360x360.g16"', 'sleep = "1360x360.k4"'), "isn't drawn in k4")
         self.bad(CALENDAR5.replace('size = "slot"\n', 'size = "slot"\ninks = ["g16"]\n', 1), "board's k4")
+
+
+# Contract 6: the calendar as the secrets track's S6 shapes it. A sync job with the secrets and the
+# network writes the agenda artifact; render draws it with neither.
+CALENDAR6 = '''
+[app]
+id = "calendar"
+title = "Calendar"
+contract = 6
+image = "ghcr.io/mike-anderson/slowapp-calendar"
+memory = "96m"
+timeout_s = 120
+network = "none"
+data = { max_mb = 32 }
+
+[ui]
+entry = "/ui/index.html"
+
+[secrets.google]
+kind = "oauth"
+auth = "google"
+multiple = true
+label = "Google Calendar"
+
+[secrets.icloud]
+label = "iCloud (Apple ID and app password)"
+optional = true
+
+[secrets.ai_key]
+kind = "value"
+label = "AI key"
+help = "An OpenAI-compatible key"
+optional = true
+
+[auth.google]
+authorize_url = "https://accounts.google.com/o/oauth2/v2/auth"
+token_url = "https://oauth2.googleapis.com/token"
+revoke_url = "https://oauth2.googleapis.com/revoke"
+scopes = ["https://www.googleapis.com/auth/calendar.readonly", "openid", "email"]
+pkce = true
+params = { access_type = "offline", prompt = "consent" }
+
+[artifacts.agenda]
+max_kb = 512
+
+[[job]]
+name = "sync"
+kind = "sync"
+network = "egress"
+secrets = ["google", "icloud", "ai_key"]
+every = "15m"
+min_every = "10m"
+
+[[job]]
+name = "calendars"
+kind = "sync"
+network = "egress"
+secrets = ["google"]
+
+[[job]]
+name = "render"
+inputs = ["self:agenda"]
+
+[[feed]]
+name = "agenda"
+size = "slot"
+'''
+
+
+class Contract6(unittest.TestCase):
+    bad = Rules.bad
+
+    def test_calendar_validates(self):
+        errs, warns = check(CALENDAR6)
+        self.assertEqual(errs, [])
+        self.assertFalse([w for w in warns if "secret" in w or "auth" in w or "artifact" in w], warns)
+
+    def test_render_has_no_secrets_and_no_network(self):
+        m = tomllib.loads(CALENDAR6)
+        jobs = {j["name"]: j for j in m["job"]}
+        self.assertEqual(vp.job_kind(m, jobs["render"]), "render")
+        self.assertEqual((vp.job_network(m, jobs["render"]), vp.job_secrets(m, jobs["render"])), ("none", []))
+        self.assertEqual(vp.job_network(m, jobs["sync"]), "egress")
+        self.assertEqual(vp.job_secrets(m, jobs["calendars"]), ["google"])
+        self.bad(CALENDAR6.replace('inputs = ["self:agenda"]', 'inputs = ["self:agenda"]\nsecrets = ["ai_key"]'),
+                 "a render job can't declare secrets")
+        self.bad(CALENDAR6.replace('inputs = ["self:agenda"]', 'inputs = ["self:agenda"]\nnetwork = "egress"'),
+                 "a render job can't declare network")
+        # A job with no kind is render: it can't take secrets either.
+        self.bad(CALENDAR6.replace('name = "calendars"\nkind = "sync"\n', 'name = "calendars"\n'),
+                 "a render job can't declare")
+        self.bad(CALENDAR6.replace('name = "render"\n', 'name = "render"\nkind = "sync"\n'),
+                 "can't be kind = \"sync\"")
+
+    def test_legacy_reads_as_every_job(self):
+        m = tomllib.loads(CALENDAR)
+        jobs = {j["name"]: j for j in m["job"]}
+        self.assertIsNone(vp.job_kind(m, jobs["render"]))
+        self.assertEqual(vp.job_secrets(m, jobs["render"]), ["digitalocean_token", "google_client"])
+        self.assertEqual(vp.job_network(m, jobs["render"]), "egress")
+        # ... and contract 6 refuses app-level secrets, which would reach render.
+        self.bad(CALENDAR6.replace('network = "none"\n', 'network = "none"\nsecrets = ["x"]\n', 1),
+                 "contract 6 declares secrets as [secrets.<name>]")
+
+    def test_rules(self):
+        self.bad(CALENDAR6.replace("contract = 6", "contract = 5"), "[secrets] needs contract = 6")
+        self.bad(CALENDAR6.replace("contract = 6", "contract = 5"), "job sync: kind needs contract = 6")
+        self.bad(CALENDAR6.replace('kind = "oauth"', 'kind = "token"'), "not one of")
+        self.bad(CALENDAR6.replace('auth = "google"\n', ''), "needs auth")
+        self.bad(CALENDAR6.replace('auth = "google"', 'auth = "github"'), "isn't declared in [auth]")
+        self.bad(CALENDAR6.replace('optional = true\n\n[secrets.ai_key]', 'multiple = true\n\n[secrets.ai_key]'),
+                 "multiple is for kind = \"oauth\"")
+        self.bad(CALENDAR6.replace('secrets = ["google"]', 'secrets = ["gmail"]'), "'gmail' isn't declared")
+        self.bad(CALENDAR6.replace('min_every = "10m"', 'min_every = "1h"'), "longer than every")
+        self.bad(CALENDAR6.replace('min_every = "10m"', 'min_every = "2m"'), "under 5 minutes")
+        self.bad(CALENDAR6.replace('every = "15m"\n', ''), "min_every needs every")
+        self.bad(CALENDAR6.replace('token_url = "https://oauth2.googleapis.com/token"',
+                                   'token_url = "http://oauth2.googleapis.com/token"'), "doesn't match")
+        self.bad(CALENDAR6.replace('max_kb = 512', 'max_kb = 0'), "< 1")
+        self.bad(CALENDAR6.replace('kind = "sync"', 'kind = "render"').replace('network = "egress"\n', '')
+                 .replace('secrets = ["google", "icloud", "ai_key"]\n', '').replace('secrets = ["google"]\n', '')
+                 .replace('min_every = "10m"\n', ''), "declare a [[job]] with kind = \"sync\"")
+        _, warns = check(CALENDAR6.replace('inputs = ["self:agenda"]\n', ''))
+        self.assertTrue(any("won't re-run render" in w for w in warns), warns)
+        _, warns = check(CALENDAR6.replace('"google", "icloud", "ai_key"', '"google", "icloud"'))
+        self.assertTrue(any("secret ai_key: no job" in w for w in warns), warns)
+
+    def test_schema_agrees_with_jsonschema(self):
+        try:
+            import jsonschema
+        except ImportError:
+            self.skipTest("jsonschema not installed")
+        v = jsonschema.Draft202012Validator(SCHEMA)
+        for text in (CALENDAR6, CALENDAR6.replace('kind = "oauth"', 'kind = "token"'),
+                     CALENDAR6.replace('max_kb = 512', 'max_kb = 0'), CALENDAR6 + '\n[auth.x]\ntoken_url = "https://a"\n'):
+            m = tomllib.loads(text)
+            self.assertEqual(bool(list(v.iter_errors(m))), bool(vp.schema_errors(m, SCHEMA, SCHEMA)), text[-60:])
 
 
 if __name__ == "__main__":

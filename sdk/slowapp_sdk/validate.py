@@ -1,4 +1,4 @@
-"""Validate an app manifest (slowapp.toml) against contracts 3 to 5.
+"""Validate an app manifest (slowapp.toml) against contracts 3 to 6.
 
   slowapp validate            ./slowapp.toml
   slowapp validate DIR ...    each DIR/slowapp.toml (or a path to the file)
@@ -87,11 +87,112 @@ def mb(size):
     return n / 1024 if unit == "k" else n * 1024 if unit == "g" else n
 
 
+def minutes(every):
+    return int(every[:-1]) * (60 if every.endswith("h") else 1)
+
+
+def job_kind(m, j):
+    """A job's kind: contract 6 jobs are `render` unless they say `sync`; before 6 a job has no
+    kind (None): every job may have the app's network and secrets."""
+    return j.get("kind", "render") if m.get("app", {}).get("contract", 3) >= 6 else None
+
+
+def job_network(m, j):
+    """What a job may reach: a contract 6 render job nothing; a sync job its own `network` or the
+    app's; before contract 6, the app's."""
+    p = m.get("app", {})
+    kind = job_kind(m, j)
+    if kind == "render":
+        return "none"
+    if kind == "sync":
+        return j.get("network", p.get("network", "none"))
+    return p.get("network", "none")
+
+
+def job_secrets(m, j):
+    """The secrets a job gets: contract 6, its own `secrets` (render none); before 6, the app's
+    `secrets` and `optional_secrets`, on every job."""
+    if job_kind(m, j) is None:
+        p = m.get("app", {})
+        return list(p.get("secrets", [])) + list(p.get("optional_secrets", []))
+    return list(j.get("secrets", [])) if job_kind(m, j) == "sync" else []
+
+
+def contract6_errors(m, errs, warns):
+    """[secrets], [auth], [artifacts] and the sync/render split (contract 6)."""
+    p = m.get("app", {})
+    jobs = m.get("job", [])
+    secrets, auth, artifacts = m.get("secrets") or {}, m.get("auth") or {}, m.get("artifacts") or {}
+    if p.get("contract", 3) < 6:
+        for key in ("secrets", "auth", "artifacts"):
+            if key in m:
+                errs.append(f"[{key}] needs contract = 6")
+        for j in jobs:
+            for key in ("kind", "network", "secrets", "min_every"):
+                if key in j:
+                    errs.append(f"job {j['name']}: {key} needs contract = 6")
+        return
+    for key in ("secrets", "optional_secrets"):
+        if p.get(key):
+            errs.append(f"[app] {key}: contract 6 declares secrets as [secrets.<name>] and grants them "
+                        "per job ([[job]] secrets), so a render job never gets one")
+    for name, s in secrets.items():
+        kind = s.get("kind", "value")
+        if kind == "oauth":
+            if "auth" not in s:
+                errs.append(f"secret {name}: kind = \"oauth\" needs auth = \"<provider>\"")
+            elif s["auth"] not in auth:
+                errs.append(f"secret {name}: auth {s['auth']!r} isn't declared in [auth]")
+        else:
+            for key in ("auth", "multiple"):
+                if key in s:
+                    errs.append(f"secret {name}: {key} is for kind = \"oauth\"")
+    used_auth = {s.get("auth") for s in secrets.values()}
+    for prov in auth:
+        if prov not in used_auth:
+            warns.append(f"[auth.{prov}] isn't used by any oauth secret")
+    used = set()
+    for j in jobs:
+        kind = job_kind(m, j)
+        where = f"job {j['name']}"
+        if j["name"] == "render" and kind != "render":
+            errs.append("the job named 'render' is the planner's output job: it can't be kind = \"sync\"")
+        if kind == "render":
+            for key in ("secrets", "network"):
+                if key in j:
+                    errs.append(f"{where}: a render job can't declare {key} (it runs with neither; "
+                                "fetch in a sync job and hand render an artifact)")
+            if "min_every" in j:
+                errs.append(f"{where}: min_every is for sync jobs")
+        for s in j.get("secrets", []):
+            used.add(s)
+            if s not in secrets:
+                errs.append(f"{where}: secret {s!r} isn't declared in [secrets]")
+        if "min_every" in j and kind == "sync":
+            if "every" not in j:
+                errs.append(f"{where}: min_every needs every (the default cadence)")
+            else:
+                if minutes(j["min_every"]) < 5:
+                    errs.append(f"{where}: min_every {j['min_every']} is under 5 minutes")
+                if minutes(j["min_every"]) > minutes(j["every"]):
+                    errs.append(f"{where}: min_every {j['min_every']} is longer than every {j['every']}")
+    for name in secrets:
+        if name not in used:
+            warns.append(f"secret {name}: no job lists it in secrets, so no run gets it")
+    if artifacts and not any(job_kind(m, j) == "sync" for j in jobs):
+        errs.append("[artifacts] are written by sync jobs: declare a [[job]] with kind = \"sync\"")
+    for name in artifacts:
+        if not any(f"self:{name}" in j.get("inputs", []) for j in jobs if job_kind(m, j) == "render"):
+            warns.append(f"artifact {name}: no render job lists \"self:{name}\" in inputs, so a new "
+                         "artifact won't re-run render")
+
+
 def rule_errors(m, app_dir=None):
     errs, warns = [], []
     p = m.get("app", {})
     jobs = [j["name"] for j in m.get("job", [])]
     feeds = {f["name"]: f for f in m.get("feed", [])}
+    contract6_errors(m, errs, warns)
 
     for kind, names in (("job", jobs), ("feed", [f["name"] for f in m.get("feed", [])]),
                         ("example", [e["name"] for e in m.get("example", [])])):
@@ -146,14 +247,13 @@ def rule_errors(m, app_dir=None):
             errs.append(f"job {j['name']}: every and daily are exclusive")
         if "jitter_s" in j and "every" not in j and "daily" not in j:
             errs.append(f"job {j['name']}: jitter_s without a schedule")
-        if "every" in j:
-            minutes = int(j["every"][:-1]) * (60 if j["every"].endswith("h") else 1)
-            if minutes < 5:
-                errs.append(f"job {j['name']}: every {j['every']} is under 5 minutes")
+        if "every" in j and minutes(j["every"]) < 5:
+            errs.append(f"job {j['name']}: every {j['every']} is under 5 minutes")
         for inp in j.get("inputs", []):
             src, _, name = inp.partition(":")
-            if src == "self" and name not in p.get("exports", []) and name not in feeds:
-                warns.append(f"job {j['name']}: input {inp} is not an export or feed of this app")
+            if src == "self" and name not in p.get("exports", []) and name not in feeds \
+                    and name not in (m.get("artifacts") or {}):
+                warns.append(f"job {j['name']}: input {inp} is not an export, artifact or feed of this app")
     for name, st in m.get("settings", {}).items():
         t, d = st.get("type"), st.get("default")
         if t == "choice" and not st.get("choices"):

@@ -1,12 +1,16 @@
 {
   "name": "@slowboard/ui",
   "version": "0.1.0",
-  "description": "React components for a Slowboard app UI, in the hub's look: slowboard.io's tokens, its four fonts (inlined into the bundle), cards, buttons, fields, toggles, segmented controls, lists and key caps.",
+  "description": "React components for a Slowboard app UI, in the hub's look: slowboard.io's tokens, its four fonts (inlined into the bundle), cards, buttons, fields, toggles, segmented controls, lists and key caps; and <sb-secret-field> and <sb-connect>, framework-free custom elements for taking secrets in.",
   "type": "module",
   "exports": {
     ".": {
       "types": "./index.d.ts",
       "default": "./index.js"
+    },
+    "./secrets": {
+      "types": "./secrets.d.ts",
+      "default": "./secrets.js"
     },
     "./ui.css": "./ui.css",
     "./tokens.css": "./tokens.css"
@@ -16,13 +20,16 @@
     "fonts",
     "index.d.ts",
     "index.js",
+    "secrets.d.ts",
+    "secrets.js",
     "tokens.css",
     "ui.css"
   ],
   "license": "UNLICENSED",
   "sideEffects": [
     "*.css",
-    "./index.js"
+    "./index.js",
+    "./secrets.js"
   ],
   "peerDependencies": {
     "react": "^19.0.0"

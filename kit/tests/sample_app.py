@@ -74,5 +74,29 @@ def remote(ctx):
         raise RuntimeError("bug")
 
 
+@kit.job("net")
+def net(ctx):
+    """What network a remote job has (test_remote): its interfaces, and whether it reaches the
+    store the test runs (SLOWAPP_TEST_REACH, host:port)."""
+    import os
+    import socket
+    host, port = os.environ["SLOWAPP_TEST_REACH"].split(":")
+    try:
+        socket.create_connection((host, int(port)), timeout=2).close()
+        reach = True
+    except OSError as e:
+        reach = f"{type(e).__name__}: {e}"
+    try:
+        with open("/proc/net/route") as f:                  # the IPv4 routes, past the header
+            routes = [line.split()[0] for line in f.readlines()[1:] if line.strip()]
+    except OSError:
+        routes = None
+    print("net job: done", flush=True)
+    kit.atomic_write(ctx.out / "net.json", json.dumps({
+        "ifaces": sorted(n for _, n in socket.if_nameindex()), "reach": reach, "routes": routes,
+        "key_file": os.environ.get("SLOWAPP_REMOTE_KEY_FILE"),
+        "key_file_exists": bool(os.environ.get("SLOWAPP_TEST_KEY_PATH")) and os.path.exists(os.environ["SLOWAPP_TEST_KEY_PATH"])}))
+
+
 if __name__ == "__main__":
     kit.main()

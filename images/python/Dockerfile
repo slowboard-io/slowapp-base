@@ -15,7 +15,7 @@ RUN apt-get update \
 ENV PYTHONPATH=/opt/slowapp \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    SLOWAPP_CONTRACT=4 \
+    SLOWAPP_CONTRACT=6 \
     SLOWAPP_FONTS=/opt/slowapp/fonts \
     SLOWAPP_MANIFEST=/app/slowapp.toml \
     TZ=America/Vancouver
@@ -27,17 +27,20 @@ COPY sdk/slowapp_sdk /opt/slowapp/slowapp_sdk
 # presigned links). Kit apps also take `slowapp-remote job <name>` as their own command.
 COPY --chmod=755 kit/bin/slowapp-remote /usr/local/bin/slowapp-remote
 
-# Bytecode is compiled now, at build: the root filesystem is read-only at run time.
+# Bytecode is compiled now, at build: the root filesystem is read-only at run time. The seal check
+# finds ChaCha20-Poly1305 in the libcrypto Python links (sealed remote runs, contract 6) on every
+# platform the image is built for.
 RUN python3 -m compileall -q /opt/slowapp \
  && python3 -c "import slowapp_kit, slowapp_kit.remote, slowapp_sdk, PIL" \
+ && python3 -c "from slowapp_kit import seal; k = bytes(32); assert seal.open_bytes(k, 'log', seal.seal_bytes(k, 'log', b'ok')) == b'ok'; print('seal:', seal.aead().name)" \
  && command -v slowapp-remote
 
 ARG VERSION=dev
 RUN echo "$VERSION" > /opt/slowapp/slowapp_sdk/VERSION
 LABEL org.opencontainers.image.title="slowapp-python" \
-      org.opencontainers.image.description="Slowapp base: Debian trixie, Python 3, Pillow, slowapp_kit (contracts 3 and 4)" \
+      org.opencontainers.image.description="Slowapp base: Debian trixie, Python 3, Pillow, slowapp_kit (contracts 3 to 6)" \
       org.opencontainers.image.source="https://github.com/mike-anderson/slowapp-base" \
       org.opencontainers.image.version="${VERSION}" \
-      org.slowboard.contract="4"
+      org.slowboard.contract="6"
 
 WORKDIR /tmp

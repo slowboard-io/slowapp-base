@@ -1,8 +1,11 @@
-// @slowboard/app: the app side of the UI bridge (protocol 1).
+// @slowboard/app: the app side of the UI bridge (protocol 2).
 //
 // An app's UI runs in a sandboxed frame with no network. Once the frame has loaded, the hub's
 // chrome posts {slowboard: "connect", protocol: 1} with a MessagePort; every call goes over that
-// port and the chrome makes it on the hub, for this app only. See protocol.json.
+// port and the chrome makes it on the hub, for this app only. The handshake says 1 so protocol 1
+// bundles keep connecting; this client says 2 in its connect call and `app.protocol` is what the
+// chrome agreed (1 from an older hub, whose chrome then answers secrets.connect "unknown_call").
+// See protocol.json.
 //
 //   import { connect } from "@slowboard/app";
 //   const app = await connect();
@@ -11,8 +14,8 @@
 //   const r = await app.jobs.run("google_finish", { url });
 
 // protocol.json, inlined (a test keeps them equal).
-export const PROTOCOL = 1;
-export const CALLS = Object.freeze(["connect", "docs.get", "docs.put", "docs.watch", "settings.get", "settings.set", "secrets.status", "secrets.set", "secrets.clear", "jobs.run", "events.watch", "ui.title", "ui.toast", "ui.confirm", "ui.resize", "device.preview", "backend.fetch"]);
+export const PROTOCOL = 2;
+export const CALLS = Object.freeze(["connect", "docs.get", "docs.put", "docs.watch", "settings.get", "settings.set", "secrets.status", "secrets.set", "secrets.clear", "secrets.connect", "jobs.run", "events.watch", "ui.title", "ui.toast", "ui.confirm", "ui.resize", "device.preview", "backend.fetch"]);
 
 /** A failed call: `code` is one of protocol.json's errors; a conflict carries `rev` and `value`. */
 export class BridgeError extends Error {
@@ -74,8 +77,10 @@ export function fromPort(port, { timeoutMs = 0 } = {}) {
     port,
     call,
     on,
-    /** What the hub said at connect: {app, title, contract, tz, locale, settings_schema, settings, docs, secrets, jobs, backend, theme, tokens}. */
+    /** What the hub said at connect: {app, title, contract, tz, locale, protocol, settings_schema, settings, docs, secrets, jobs, backend, theme, tokens}. */
     info: null,
+    /** The protocol the chrome agreed at connect: 2, or 1 from an older hub (no secrets.connect). */
+    get protocol() { return app.info?.protocol ?? 1; },
     docs: {
       /** @returns {Promise<{rev: number, value: any, at: string|null}>} rev 0 and null when never written */
       get: (name) => call("docs.get", name),
@@ -98,10 +103,23 @@ export function fromPort(port, { timeoutMs = 0 } = {}) {
       set: (values) => call("settings.set", values),
     },
     secrets: {
-      /** [{name, optional, set}]: whether each is set, never its value. */
+      /**
+       * Whether each is set, never its value: [{name, optional, set, kind, label, help, last_used}],
+       * and for an oauth secret also {auth, multiple, scopes, granted_at, accounts}.
+       */
       status: () => call("secrets.status"),
+      /** A value secret. On an oauth secret: code "kind". */
       set: (name, value) => call("secrets.set", name, value),
-      clear: (name) => call("secrets.clear", name),
+      /** Clear a value; disconnect an oauth secret, or with `account` one of its accounts. */
+      clear: (name, account) => (account == null ? call("secrets.clear", name) : call("secrets.clear", name, account)),
+      /**
+       * Protocol 2, an oauth secret: the hub's page starts the sign-in at top level and resolves
+       * {url}, a hub link that starts it again (for a blocked pop-up). The outcome arrives as a
+       * `secret` event (secrets.watch). `account` reconnects one account of a multiple secret.
+       */
+      connect: (name, opts) => (opts ? call("secrets.connect", name, opts) : call("secrets.connect", name)),
+      /** Protocol 2: f({name, ...status}) after any set, clear, connect or disconnect. Returns an unsubscribe. */
+      watch: (f) => on("secret", f),
     },
     jobs: {
       /** Run one of the app's jobs with `args` (/in/args.json); resolves when it ends: {run, outcome, ok, exit, result, message}. */
@@ -176,13 +194,15 @@ export function connect({ waitMs = 10000, timeoutMs = 0, win = globalThis } = {}
       if (e.source !== win.parent || !d || d.slowboard !== "connect" || !e.ports?.[0]) return;
       win.removeEventListener("message", onMsg);
       clearTimeout(timer);
-      if (d.protocol !== PROTOCOL) {
-        reject(new BridgeError({ code: "protocol", message: `the hub speaks protocol ${d.protocol}, this app ${PROTOCOL}` }));
+      // Any protocol from 1 on: which one is used is agreed in the connect call.
+      if (!Number.isInteger(d.protocol) || d.protocol < 1) {
+        reject(new BridgeError({ code: "protocol", message: `the hub's handshake says protocol ${d.protocol}` }));
         return;
       }
       const app = fromPort(e.ports[0], { timeoutMs });
       try {
-        app.info = await app.call("connect");
+        const info = await app.call("connect", { protocol: PROTOCOL });
+        app.info = { ...info, protocol: Math.min(PROTOCOL, Number(info?.protocol) || 1) };
         resolve(app);
       } catch (err) { reject(err); }
     }
