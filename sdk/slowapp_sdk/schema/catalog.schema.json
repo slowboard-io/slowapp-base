@@ -15,7 +15,7 @@
       "properties": {
         "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,23}$"},
         "title": {"type": "string", "minLength": 1, "maxLength": 40},
-        "contract": {"enum": [3, 4]},
+        "contract": {"enum": [3, 4, 5, 6]},
         "image": {"type": "string", "minLength": 1, "maxLength": 200},
         "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
         "author": {"type": "string", "minLength": 1, "maxLength": 64},
@@ -45,7 +45,19 @@
         "backend": {"type": "boolean"},
         "imports": {"$ref": "#/$defs/strings"},
         "exports": {"$ref": "#/$defs/strings"},
-        "events": {"$ref": "#/$defs/strings"}
+        "events": {"$ref": "#/$defs/strings"},
+        "oauth": {
+          "description": "Contract 6: each oauth secret's provider, the scopes it asks for, and whether it holds several accounts.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "object", "required": ["provider", "scopes", "multiple"], "additionalProperties": false,
+            "properties": {
+              "provider": {"type": "string", "minLength": 1},
+              "scopes": {"$ref": "#/$defs/strings"},
+              "multiple": {"type": "boolean"}
+            }
+          }
+        }
       }
     },
     "feeds": {

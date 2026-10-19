@@ -466,5 +466,27 @@ class _Body(io.BytesIO):
     status = 200
 
 
+class Grants(unittest.TestCase):
+    def test_contract6_grants(self):
+        import tomllib
+        from test_validate import CALENDAR, CALENDAR6
+        from slowapp_sdk import validate
+        g = catalog.grants(tomllib.loads(CALENDAR6))
+        self.assertEqual(g["network"], "egress", "a sync job reaches the network")
+        self.assertEqual(g["secrets"], ["google"])
+        self.assertEqual(g["optional_secrets"], ["icloud", "ai_key"])
+        self.assertEqual(g["oauth"], {"google": {"provider": "google", "multiple": True, "scopes": [
+            "https://www.googleapis.com/auth/calendar.readonly", "openid", "email"]}})
+        schema = json.loads((Path(catalog.__file__).parent / "schema" / "catalog.schema.json").read_text())
+        self.assertEqual(validate.schema_errors(g, schema["properties"]["grants"], schema), [])
+        # No sync job with the network: none, whatever [app] network says.
+        m = tomllib.loads(CALENDAR6.replace('network = "egress"\n', ''))
+        self.assertEqual(catalog.grants(m)["network"], "none")
+        # Before contract 6, as it was.
+        g = catalog.grants(tomllib.loads(CALENDAR))
+        self.assertEqual((g["network"], g["secrets"], g["optional_secrets"]), ("egress", ["digitalocean_token"], ["google_client"]))
+        self.assertNotIn("oauth", g)
+
+
 if __name__ == "__main__":
     unittest.main()

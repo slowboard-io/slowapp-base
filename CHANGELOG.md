@@ -3,6 +3,20 @@
 Base image releases (`vX.Y.Z` tags; README, "Versions"). Earlier releases are in the GitHub
 release notes.
 
+## Unreleased (1.5.0)
+
+Contract 6: the sync/render split and per-job secrets (the secrets track's S2, S3 and S5 halves in
+this repo). Contracts 3 to 5 keep working unchanged.
+
+- **Manifest.** `[secrets.<name>]` (`kind = "value" | "oauth"`, `label`, `help`, `optional`, and
+  for OAuth `auth` and `multiple`), `[auth.<provider>]` (`authorize_url`, `token_url`,
+  `revoke_url`, `scopes`, `pkce`, `params`), `[artifacts.<name>] max_kb`, and on `[[job]]`: `kind
+  = "sync" | "render"` (default render), `network` and `secrets` (sync only), and `min_every` next
+  to a sync job's `every`. A render job that declares secrets or a network is a validator error,
+  as are app-level `secrets` in a contract 6 manifest; before contract 6 they still read as value
+  secrets on every job. The SDK's schema and validator, the catalog's grants (`oauth`, and the
+  network from the jobs) and the catalog schema (contracts 3 to 6) follow.
+
 ## 1.4.1
 
 - `check_inks` (so `encode_png`, `to_grey`, `codes`) asks PIL's `getcolors` for just past the ink

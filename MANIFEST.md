@@ -1,4 +1,4 @@
-# App manifest (`slowapp.toml`), contract 5
+# App manifest (`slowapp.toml`), contract 6
 
 A slowapp is an OCI image plus this manifest (the hub's design: epaper-dashboard
 `docs/SLOWBOARD.md` §8; section numbers below refer to it). The manifest says what the app may
@@ -15,6 +15,12 @@ still loads on a contract 4 hub; contract 4 keys need `contract = 4`. The JavaSc
 - A `[[feed]]` may declare `inks = ["g16"]`, which is sixteen greys.
 - A fixed-size feed is drawn for any device that asks for it.
 - The hub runs `render` once per device. Each run's `SLOWAPP_FEEDS` holds only that device's feeds, and `SLOWAPP_DEVICE` (`ctx.device`) names the device. So draw what's asked for and nothing else.
+
+**Contract 6** splits fetching from drawing, so secrets reach only the runs that need them.
+- A **sync** job (`[[job]] kind = "sync"`) runs once per install (a household's copy of the app), with the network and only the secrets it names (`[[job]] secrets`). It writes artifacts, `/out/artifacts/<name>/`.
+- A **render** job (every other job, `render` included) runs once per device with no network and no secrets. It draws from the sync job's artifacts at `/in/artifacts/<name>/`.
+- Secrets are declared as `[secrets.<name>]`: a value the household types in, or an OAuth sign-in (`kind = "oauth"`, `[auth.<provider>]`) the hub runs and hands the sync job as a short-lived access token (`token(name)` in the kit).
+- A contract 3 to 5 manifest still loads unchanged: its app-level `secrets` read as value secrets on every job, and its jobs keep the app's `network`.
 
 - Structure: [`sdk/slowapp_sdk/schema/slowapp.schema.json`](sdk/slowapp_sdk/schema/slowapp.schema.json) (JSON Schema 2020-12).
 - Rules a schema can't express: [`sdk/slowapp_sdk/validate.py`](sdk/slowapp_sdk/validate.py), listed below.
@@ -45,14 +51,14 @@ tests/             unit tests, run inside the base image
 |---|---|---|
 | `id` | string, `[a-z][a-z0-9-]{1,23}` | Names the container `sb-<id>`; the repo is `slowapp-<id>` by convention. |
 | `title` | string, ≤ 40 | Shown on the hub's app card. |
-| `contract` | `3`, `4` or `5` | The contract the app is written to (2 was 3 with `[pane]` and `EPAPER_*`). Its jobs get it as `SLOWAPP_CONTRACT`. |
+| `contract` | `3` to `6` | The contract the app is written to (2 was 3 with `[pane]` and `EPAPER_*`). Its jobs get it as `SLOWAPP_CONTRACT`. |
 | `image` | string | Registry path without tag; the hub's config pins `image@sha256:…`. |
 | `memory` | size (`96m`, `1g`) | Hard limit: `--memory` = `--memory-swap`. Charged at admission (§7.4). |
 | `tmp` | size | `--tmpfs /tmp:size=`. Counts against `memory`. |
 | `timeout_s` | 1–3600 | The job is killed past this (exit 137, outcome `timeout`). |
-| `network` | `none` \| `egress` | `egress` is `pasta --no-map-gw`: internet **and the LAN** (M14), never host loopback. |
-| `secrets` | names | Required podman secrets at `/run/secrets/<name>`. Missing → exit 5. |
-| `optional_secrets` | names | Mounted once set (from the CLI, or the app's UI with `secrets.set`). |
+| `network` | `none` \| `egress` | `egress` is `pasta --no-map-gw`: internet **and the LAN** (M14), never host loopback. Contract 6: the default for sync jobs only; render jobs never have the network. |
+| `secrets` | names | Contracts 3 to 5: required secrets at `/run/secrets/<name>`, on every job. Missing → exit 5. Contract 6 uses `[secrets.<name>]` instead (an error here). |
+| `optional_secrets` | names | Contracts 3 to 5: mounted once set (from the CLI, or the app's UI with `secrets.set`). |
 | `data` | `{ max_mb }` | `/data` bind mount. Over `max_mb` (checked with `du` after runs) pauses the app. |
 | `cache` | `{ tmpfs_mb }` | `--tmpfs /cache`. Counts against `memory`. |
 | `exports` | names | P4 transitional only (R3): files under `/export` other apps may import. |
@@ -94,6 +100,72 @@ private state stays in `/data`.
 | `on_change` | Jobs to run after the UI writes it, 2 s after the last write. A job's write doesn't trigger them. |
 | `writer` | `ui`, `job` or `both` (default): who may write it. |
 
+## `[secrets.<name>]` (contract 6)
+
+Each secret the app takes. The hub keeps it sealed per install and hands it only to the sync jobs
+that list it in `[[job]] secrets`, as a file and never an environment variable. The app's UI sets,
+connects and clears secrets through the bridge (`secrets.*`, `<sb-secret-field>`, `<sb-connect>`)
+and only ever sees whether one is set, never its value.
+
+| Key | Meaning |
+|---|---|
+| `kind` | `value` (default): something the household types in, such as an API key. `/run/secrets/<name>`, read with `secret(name)`. `oauth`: a sign-in the hub runs with `[auth.<provider>]`; the run gets a fresh access token, `/run/secrets/<name>.json`, read with `token(name)`. |
+| `label` | What the hub's page and the UI elements call it (≤ 60). |
+| `help` | A line under the field (≤ 400). |
+| `optional` | `true`: a run without it goes ahead. A required secret that isn't set holds the job (exit 5, `needs_config`). |
+| `auth` | `oauth` only: the `[auth.<provider>]` to sign in with. |
+| `multiple` | `oauth` only: several accounts under one secret (a household's Google accounts). Each is `/run/secrets/<name>/<account>.json`, and `token(name)` gives a list. |
+
+```toml
+[secrets.google]
+kind = "oauth"
+auth = "google"
+multiple = true
+label = "Google Calendar"
+
+[secrets.ai_key]                 # an OpenAI-compatible key; its base URL is a setting
+label = "AI key"
+optional = true
+```
+
+## `[auth.<provider>]` (contract 6)
+
+Where an `oauth` secret signs in and what it asks for. The client (its id and secret) is the hub's
+own config, never the manifest's: which apps may use which client is the hub's decision (E10). The
+hub runs the authorization-code flow at top level with one redirect URI, keeps the refresh token
+sealed and writes a one-hour access token into each sync run that names the secret.
+
+| Key | Meaning |
+|---|---|
+| `authorize_url`, `token_url` | `https://` URLs. Required. |
+| `revoke_url` | `https://`: called on Disconnect. |
+| `scopes` | What to ask for. The hub refuses a grant that doesn't cover them. |
+| `pkce` | `true` (S256) unless the provider can't. |
+| `params` | Extra authorize parameters, strings (`access_type = "offline"`, `prompt = "consent"`). |
+| `label` | The provider's name on the Connect button (default: the secret's label). |
+
+```toml
+[auth.google]
+authorize_url = "https://accounts.google.com/o/oauth2/v2/auth"
+token_url = "https://oauth2.googleapis.com/token"
+revoke_url = "https://oauth2.googleapis.com/revoke"
+scopes = ["https://www.googleapis.com/auth/calendar.readonly", "openid", "email"]
+params = { access_type = "offline", prompt = "consent" }
+```
+
+## `[artifacts.<name>]` (contract 6)
+
+What sync jobs hand render: each a directory of files the sync job writes at
+`/out/artifacts/<name>/` and render reads at `/in/artifacts/<name>/` (read only). The hub keeps the
+latest per install, sealed, and runs render again when one's hash changes, for the render jobs that
+list it as `inputs = ["self:<name>"]`. A sync run that exits 0 replaces each artifact it wrote
+whole; one it didn't write stays as it was. Within an app this replaces R3's `exports` and
+`imports`.
+
+| Key | Meaning |
+|---|---|
+| `max_kb` | 1–65536, required: the most the artifact's files may add up to. Over it, the run is a contract error (64) and the old artifact stays. |
+
 ## `[events]`
 
 `accept = ["answer", ...]`: `emit` event kinds routed to this app. Needs a job named `event`.
@@ -103,10 +175,14 @@ private state stays in `/data`.
 | Key | Meaning |
 |---|---|
 | `name` | `[a-z][a-z0-9_-]*`. `render` is the planner-driven output job; `event` receives events. |
-| `every` | `15m`, `1h`: a wall-clock schedule (≥ 5 min), separate from the planner. |
+| `kind` | Contract 6: `render` (default) or `sync`. A sync job runs once per install with its `network` and `secrets`, and writes artifacts; a render job runs per device with no network and no secrets. The job named `render` is always render. |
+| `network` | Contract 6, sync jobs only: `none` or `egress` (default: `[app] network`). |
+| `secrets` | Contract 6, sync jobs only: the `[secrets]` this job gets. Nothing else reaches it. |
+| `every` | `15m`, `1h`: a wall-clock schedule (≥ 5 min), separate from the planner. For a sync job, the default cadence: a household may slow it down, not below `min_every`. |
+| `min_every` | Contract 6, sync jobs with `every`: the fastest a household may set it (≥ 5 min). "Update now" runs are capped separately by the hub. The two set the hub's daily budget for handing out the job's secrets. |
 | `daily` | `HH:MM` local. Exclusive with `every`. |
 | `jitter_s` | Random delay added to a schedule. |
-| `inputs` | `self:<export>` or `<app>:<export>`: the planner skips the job while their hash is unchanged. |
+| `inputs` | `self:<export>` or `<app>:<export>`: the planner skips the job while their hash is unchanged. Contract 6: `self:<artifact>` for an artifact a sync job writes. |
 | `expected_s` | Duration hint until the hub has measured p90 (§7.5). |
 | `args` | Contract 4: `{ name = "string" \| "number" \| "integer" \| "boolean" }`. What the UI may pass to `jobs.run`; the hub checks the types, refuses other names, and writes `/in/args.json` (`ctx.args`). All optional. The job's `/out/result.json` (`ctx.result(value)`, ≤ 256 KiB) goes back to the UI. |
 
@@ -160,6 +236,14 @@ repo every push renders the examples.
   without a UI.
 - Contract 5: `inks` other than `["k4"]` need `contract = 5`; a slot feed includes `k4`; the
   `prompts` feed is a k4 slot feed.
+- Contract 6: `[secrets]`, `[auth]`, `[artifacts]` and a job's `kind`, `network`, `secrets` and
+  `min_every` need `contract = 6`, and a contract 6 app has no app-level `secrets` or
+  `optional_secrets`. A render job (any job without `kind = "sync"`) declares no `secrets`, no
+  `network` and no `min_every`; the job named `render` isn't a sync job. A job's secrets are
+  declared in `[secrets]`; an `oauth` secret names a declared `[auth]` provider, and `auth` and
+  `multiple` are for `oauth` only. `min_every` needs `every` and is between 5 minutes and `every`.
+  `[artifacts]` need a sync job. Warnings: a secret no job lists, a provider no secret uses, an
+  artifact no render job has as an input.
 - Each example's fixture directory exists, its job and feeds are declared, a fixed-size feed
   matches the example's surface, and the surface's ink set is one of the feed's `inks`. Warnings: a slot surface other than 452/456 × 444, a feed with no
   example, a required setting with no default.

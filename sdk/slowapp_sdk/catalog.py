@@ -194,12 +194,27 @@ class Composer:
 # ------------------------------------------------------------------ build
 
 def grants(m):
+    """What the app may touch. Contract 6: the network is egress if any job may reach it (render
+    jobs never do), the secrets come from [secrets] (required, then optional) and `oauth` says
+    what each sign-in asks for."""
     p, ui = m["app"], m.get("ui") or {}
-    g = {"network": p["network"], "memory": p["memory"], "secrets": p.get("secrets", []),
-         "optional_secrets": p.get("optional_secrets", []), "prompts": bool(p.get("prompts")),
+    jobs = m.get("job", [])
+    decl = m.get("secrets") or {}
+    network = "egress" if any(validate.job_network(m, j) == "egress" for j in jobs) else "none"
+    if not jobs:
+        network = p["network"]
+    g = {"network": network, "memory": p["memory"],
+         "secrets": p.get("secrets", []) + [n for n, s in decl.items() if not s.get("optional")],
+         "optional_secrets": p.get("optional_secrets", []) + [n for n, s in decl.items() if s.get("optional")],
+         "prompts": bool(p.get("prompts")),
          "ui": bool(ui.get("entry")), "backend": bool(ui.get("backend")),
          "imports": p.get("imports", []), "exports": p.get("exports", []),
          "events": (m.get("events") or {}).get("accept", [])}
+    oauth = {n: {"provider": s["auth"], "scopes": (m.get("auth") or {}).get(s["auth"], {}).get("scopes", []),
+                 "multiple": bool(s.get("multiple"))}
+             for n, s in decl.items() if s.get("kind") == "oauth" and s.get("auth")}
+    if oauth:
+        g["oauth"] = oauth
     if p.get("tmp"):
         g["tmp"] = p["tmp"]
     if (p.get("data") or {}).get("max_mb") is not None:
