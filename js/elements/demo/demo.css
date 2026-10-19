@@ -1,0 +1,8 @@
+/* The host's part: the fonts and the page around the elements (tokens.css gives the rest). */
+@font-face { font-family: "Chivo Variable"; src: url("../../ui/fonts/chivo-latin-wght-normal.woff2") format("woff2"); font-weight: 100 900; }
+@font-face { font-family: "Press Start 2P"; src: url("../../ui/fonts/press-start-2p-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Silkscreen"; src: url("../../ui/fonts/silkscreen-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "VT323"; src: url("../../ui/fonts/vt323-latin-400-normal.woff2") format("woff2"); }
+html { font-synthesis: none; }
+body { margin: 0; background: var(--paper); color: var(--text); font: 400 var(--step-0)/1.55 var(--font-body); }
+:root[data-theme="dark"] { --paper: #141414; --text: #f1f0ec; --keyline: #f1f0ec; --muted: #b3b1aa; }

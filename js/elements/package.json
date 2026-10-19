@@ -1,0 +1,39 @@
+{
+  "name": "@slowboard/elements",
+  "version": "0.1.0",
+  "description": "The slowapp sheet as framework-free custom elements, shared by slowboard.io and the hub: <slowapp-sheet>, <slowapp-screens>, <slowapp-grants>, <slowapp-facts>, <slowapp-disk>, from a catalog bundle. Shadow DOM with a constructed stylesheet; works under a strict CSP.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./render": {
+      "types": "./index.d.ts",
+      "default": "./render.js"
+    },
+    "./styles": "./styles.js",
+    "./dist/slowboard-elements.js": "./dist/slowboard-elements.js",
+    "./dist/elements.css": "./dist/elements.css"
+  },
+  "files": [
+    "README.md",
+    "index.d.ts",
+    "index.js",
+    "render.js",
+    "styles.js",
+    "dist"
+  ],
+  "scripts": {
+    "build": "node build.js",
+    "prepack": "node build.js"
+  },
+  "license": "UNLICENSED",
+  "sideEffects": [
+    "./index.js",
+    "./dist/slowboard-elements.js"
+  ],
+  "devDependencies": {
+    "vite": "^8.0.0"
+  }
+}

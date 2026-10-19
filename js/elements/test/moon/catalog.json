@@ -1,0 +1,368 @@
+{
+ "catalog": 1,
+ "app": {
+  "id": "moon",
+  "title": "Moon",
+  "contract": 4,
+  "image": "ghcr.io/mike-anderson/slowapp-example",
+  "blurb": "The moon's phase, and when the next full and new moons are.",
+  "about": "Today's moon as it looks from your hemisphere, how much of it is lit, and the dates of the next full and new moons, with the week ahead on a second card.",
+  "ink": "yellow",
+  "repo": "https://github.com/mike-anderson/slowapp-example",
+  "author": "mike-anderson"
+ },
+ "manifest": {
+  "app": {
+   "id": "moon",
+   "title": "Moon",
+   "contract": 4,
+   "image": "ghcr.io/mike-anderson/slowapp-example",
+   "memory": "48m",
+   "tmp": "8m",
+   "timeout_s": 30,
+   "network": "none",
+   "blurb": "The moon's phase, and when the next full and new moons are.",
+   "about": "Today's moon as it looks from your hemisphere, how much of it is lit, and the dates of the next full and new moons, with the week ahead on a second card.",
+   "ink": "yellow",
+   "repo": "https://github.com/mike-anderson/slowapp-example"
+  },
+  "settings": {
+   "south": {
+    "type": "boolean",
+    "default": false,
+    "label": "Southern hemisphere (the lit side flips)"
+   }
+  },
+  "job": [
+   {
+    "name": "render",
+    "expected_s": 3
+   }
+  ],
+  "feed": [
+   {
+    "name": "phase",
+    "size": "slot"
+   }
+  ],
+  "example": [
+   {
+    "name": "today",
+    "caption": "7 Oct 2026: a waning crescent, new moon on the 10th",
+    "fixture": "fixtures/default",
+    "now": "2026-10-07T09:00:00-07:00",
+    "feeds": {
+     "phase": "456x444.k4"
+    }
+   },
+   {
+    "name": "south",
+    "caption": "The same moon from the southern hemisphere",
+    "fixture": "fixtures/default",
+    "now": "2026-10-07T09:00:00-07:00",
+    "settings": {
+     "south": true
+    },
+    "feeds": {
+     "phase": "456x444.k4"
+    }
+   }
+  ]
+ },
+ "manifest_sha256": "4ea285e38cc6debbb48476d7535a812b5f9035b35e26374811a98bf5692bf676",
+ "grants": {
+  "network": "none",
+  "memory": "48m",
+  "secrets": [],
+  "optional_secrets": [],
+  "prompts": false,
+  "ui": false,
+  "backend": false,
+  "imports": [],
+  "exports": [],
+  "events": [],
+  "tmp": "8m"
+ },
+ "feeds": [
+  {
+   "name": "phase",
+   "size": "slot",
+   "surfaces": {
+    "452x444.k4": {
+     "ok": true
+    },
+    "456x444.k4": {
+     "ok": true
+    },
+    "1360x444.k4": {
+     "ok": true
+    }
+   },
+   "supported": [
+    "452x444.k4",
+    "456x444.k4",
+    "1360x444.k4"
+   ],
+   "inks": [
+    "black",
+    "white",
+    "yellow",
+    "red"
+   ],
+   "screens": {
+    "home": 1,
+    "detail": 1
+   }
+  }
+ ],
+ "examples": [
+  {
+   "name": "today",
+   "now": "2026-10-07T09:00:00-07:00",
+   "job": "render",
+   "feeds": {
+    "phase": "456x444.k4"
+   },
+   "caption": "7 Oct 2026: a waning crescent, new moon on the 10th",
+   "seconds": 0.2,
+   "platform": "linux/arm64",
+   "memory_peak_kb": 21432,
+   "frames": [
+    {
+     "kind": "home",
+     "file": "screens/today/panel-home.png",
+     "sha256": "c9fa7404ecf31446c7b0ad5b3cb190394a45f109aeb9f2727250c69200f0e235",
+     "strips": false
+    }
+   ]
+  },
+  {
+   "name": "south",
+   "now": "2026-10-07T09:00:00-07:00",
+   "job": "render",
+   "feeds": {
+    "phase": "456x444.k4"
+   },
+   "caption": "The same moon from the southern hemisphere",
+   "settings": {
+    "south": true
+   },
+   "seconds": 0.2,
+   "platform": "linux/arm64",
+   "memory_peak_kb": 21324,
+   "frames": [
+    {
+     "kind": "home",
+     "file": "screens/south/panel-home.png",
+     "sha256": "3950aa22972b3b0dc39f8dad95146a4948f85107d596d9c446ce655b95e49995",
+     "strips": false
+    }
+   ]
+  }
+ ],
+ "screens": [
+  {
+   "example": "today",
+   "feed": "phase",
+   "surface": "456x444.k4",
+   "card": "home",
+   "kind": "home",
+   "title": "Waning crescent",
+   "file": "screens/today/456x444.k4/phase/home.png",
+   "sha256": "75d91c4b7dd9263207a2e505e36a804e7ffe57b7a5958039cbbb40f0db81d402",
+   "inks": [
+    "black",
+    "white",
+    "yellow",
+    "red"
+   ]
+  },
+  {
+   "example": "today",
+   "feed": "phase",
+   "surface": "456x444.k4",
+   "card": "week",
+   "kind": "detail",
+   "title": "The week ahead",
+   "file": "screens/today/456x444.k4/phase/week.png",
+   "sha256": "25a13eb8ff88c64b4f8c1a7cb4c6727fb823e07ce425677d10fc327cb7377049",
+   "inks": [
+    "black",
+    "white",
+    "yellow",
+    "red"
+   ]
+  },
+  {
+   "example": "today",
+   "feed": "phase",
+   "surface": "452x444.k4",
+   "card": "home",
+   "kind": "home",
+   "title": "Waning crescent",
+   "file": "screens/today/452x444.k4/phase/home.png",
+   "sha256": "44e6596d8539fb4f64d580d5285d488a16ec67074fa297af4c6539649180e432",
+   "inks": [
+    "black",
+    "white",
+    "yellow",
+    "red"
+   ]
+  },
+  {
+   "example": "today",
+   "feed": "phase",
+   "surface": "452x444.k4",
+   "card": "week",
+   "kind": "detail",
+   "title": "The week ahead",
+   "file": "screens/today/452x444.k4/phase/week.png",
+   "sha256": "ed8912484a0c5c845e75d2fe78e54cc139a55816276d68366f239b3e5a35ad2d",
+   "inks": [
+    "black",
+    "white",
+    "yellow",
+    "red"
+   ]
+  },
+  {
+   "example": "today",
+   "feed": "phase",
+   "surface": "1360x444.k4",
+   "card": "home",
+   "kind": "home",
+   "title": "Waning crescent",
+   "file": "screens/today/1360x444.k4/phase/home.png",
+   "sha256": "f108b4a9073f40428c725b03556e6a790e8ea7f0b2524ab6fc48a2edb99469aa",
+   "inks": [
+    "black",
+    "white",
+    "yellow",
+    "red"
+   ]
+  },
+  {
+   "example": "today",
+   "feed": "phase",
+   "surface": "1360x444.k4",
+   "card": "week",
+   "kind": "detail",
+   "title": "The week ahead",
+   "file": "screens/today/1360x444.k4/phase/week.png",
+   "sha256": "e547bb0af51033eb32879194cebad397072927a7028fe4ee2902d3b2fa5c9923",
+   "inks": [
+    "black",
+    "white",
+    "yellow",
+    "red"
+   ]
+  },
+  {
+   "example": "south",
+   "feed": "phase",
+   "surface": "456x444.k4",
+   "card": "home",
+   "kind": "home",
+   "title": "Waning crescent",
+   "file": "screens/south/456x444.k4/phase/home.png",
+   "sha256": "7e341be31e4182db2dae61faba4e12a8974810535a0c261e2fb0319cf43dba16",
+   "inks": [
+    "black",
+    "white",
+    "yellow",
+    "red"
+   ]
+  },
+  {
+   "example": "south",
+   "feed": "phase",
+   "surface": "456x444.k4",
+   "card": "week",
+   "kind": "detail",
+   "title": "The week ahead",
+   "file": "screens/south/456x444.k4/phase/week.png",
+   "sha256": "f53efbd1b167bc0fa771b3e0ee86f2e10f469e2d18b9036c443d463d0fbf941b",
+   "inks": [
+    "black",
+    "white",
+    "yellow",
+    "red"
+   ]
+  },
+  {
+   "example": "south",
+   "feed": "phase",
+   "surface": "452x444.k4",
+   "card": "home",
+   "kind": "home",
+   "title": "Waning crescent",
+   "file": "screens/south/452x444.k4/phase/home.png",
+   "sha256": "de75afe7b2af1ac63a9a341ad6c555b1c1bcc9c75e670534e802ff175294d784",
+   "inks": [
+    "black",
+    "white",
+    "yellow",
+    "red"
+   ]
+  },
+  {
+   "example": "south",
+   "feed": "phase",
+   "surface": "452x444.k4",
+   "card": "week",
+   "kind": "detail",
+   "title": "The week ahead",
+   "file": "screens/south/452x444.k4/phase/week.png",
+   "sha256": "cef23ccddefec3ecff2e6fccf36e11d5760391b895cbbff441d5da2167f3c299",
+   "inks": [
+    "black",
+    "white",
+    "yellow",
+    "red"
+   ]
+  },
+  {
+   "example": "south",
+   "feed": "phase",
+   "surface": "1360x444.k4",
+   "card": "home",
+   "kind": "home",
+   "title": "Waning crescent",
+   "file": "screens/south/1360x444.k4/phase/home.png",
+   "sha256": "f8233fce7e89000855851b0557c753710e4bb36ffed1e61e9f3c60955b878d1b",
+   "inks": [
+    "black",
+    "white",
+    "yellow",
+    "red"
+   ]
+  },
+  {
+   "example": "south",
+   "feed": "phase",
+   "surface": "1360x444.k4",
+   "card": "week",
+   "kind": "detail",
+   "title": "The week ahead",
+   "file": "screens/south/1360x444.k4/phase/week.png",
+   "sha256": "0f595d0e9c95aee71713927031795c7976c93da46f6e5e71e5dfefd23da93153",
+   "inks": [
+    "black",
+    "white",
+    "yellow",
+    "red"
+   ]
+  }
+ ],
+ "standard_surfaces": [
+  "452x444.k4",
+  "456x444.k4",
+  "1360x444.k4"
+ ],
+ "made": {
+  "at": "2026-10-19T05:09:17+00:00",
+  "sdk": "1.4.1",
+  "slowd": "none",
+  "platform": "linux/arm64"
+ }
+}

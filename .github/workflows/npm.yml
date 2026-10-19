@@ -23,11 +23,12 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build:example
+      - run: npm run build
       - name: Publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          for p in app app-react ui dev; do
+          for p in app app-react ui dev elements; do
             name=$(node -p "require('./js/$p/package.json').name")
             version=$(node -p "require('./js/$p/package.json').version")
             if npm view "$name@$version" version >/dev/null 2>&1; then
