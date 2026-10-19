@@ -324,6 +324,9 @@ class Stop:
 def run_child(cmd, env, log, timeout, stop=None):
     """The job as a child: stdout and stderr together, into the log as they come. Returns its exit
     code (128 + signal if killed; 137 if it ran past timeout). stop: a Stop to hand the child to."""
+    # Looked up first: under qemu-user a missing program comes back as exit 127, not an OSError.
+    if shutil.which(cmd[0], path=env.get("PATH", os.defpath)) is None:
+        raise FileNotFoundError(f"no such program: {cmd[0]}")
     p = subprocess.Popen(cmd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                          stderr=subprocess.STDOUT)
     if stop is not None:
