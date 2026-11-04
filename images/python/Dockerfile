@@ -6,7 +6,7 @@
 #
 # Debian's armhf packages, not PyPI: PyPI has few 32-bit ARM wheels. The Debian base is pinned
 # by digest in the FROM line itself, so Dependabot can bump it.
-FROM docker.io/library/debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f
+FROM docker.io/library/debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 python3-pil tzdata ca-certificates \
