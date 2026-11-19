@@ -10,8 +10,12 @@ board swaps in place as its keys change their values, without the app running on
 Everything the hub checks at ingest is checked here first, so a mistake fails the app's tests:
 the exact variant set for each kind, every variant exactly its rect's size and in the feed's inks,
 ids, focus and keys, and on a 540 x 960 board, that no control lands in the board's own areas
-(its key labels, their lane, the app strip and the QR code to the app's page). `screens(card, surface)` composes the card with
+(the app strip and the QR code to the app's page). `screens(card, surface)` composes the card with
 each variant in turn, for a test that looks at every state a board can show.
+
+The key hints are the app's to draw, where the keys are (KEY_Y). A deck draws them in its bodies; a
+card with controls draws them as `label` controls, blank in their `none` variant (the keys asleep)
+and saying what a tap does now in the others, so they come and go with the keys without a render.
 """
 import re
 from dataclasses import dataclass, field
@@ -32,10 +36,13 @@ MAX_CONTROLS, MAX_VARIANTS, MAX_VALUE, MAX_APPLIED, MAX_LABEL = 16, 64, 15, 256,
 NAME_RE = re.compile(r"^(?!\.)[A-Za-z0-9_.-]{1,48}$")
 
 # The board's own areas on a 540 x 960 portrait glass, [x, y, w, h] (sb_proto::schedule::areas):
-# the key labels, the lane their lines run down to the keys, the app strip, and a QR code to the
-# app's page (on a card with controls). Draw nothing in them either: the board covers them.
-BOARD_AREAS = {"labels": (336, 16, 144, 120), "lane": (480, 0, 60, 340), "strip": (0, 900, 540, 60),
-               "qr": (16, 16, 120, 120)}
+# the app strip, and a QR code to the app's page (on a card with controls). Draw nothing in them
+# either: the board covers them.
+BOARD_AREAS = {"strip": (0, 900, 540, 60), "qr": (16, 16, 120, 120)}
+
+# The keys on that glass, for drawing their hints: on the right edge, K1 (black, a white square:
+# key1, Done or Back) centred at y 200 and K2 (white, a black circle: key2, Next) at y 310.
+KEY_Y = {"key1": 200, "key2": 310}
 
 
 @dataclass
