@@ -74,6 +74,7 @@ class ControlsOut(Env):
         no(lambda c: c.items[0].variants.update({"1": flat(400, 96, 0)}), "rect is 480x96")
         no(lambda c: setattr(c.items[0], "rect", (0, 152, 540, 96)), "overlaps the board's lane")
         no(lambda c: setattr(c.items[1], "rect", (0, 880, 480, 40)), "overlaps the board's strip")
+        no(lambda c: setattr(c.items[1], "rect", (0, 100, 200, 40)), "overlaps the board's qr")
         no(lambda c: setattr(c.items[0], "emit", None), "emit needs a kind")
         no(lambda c: setattr(c.items[0], "due", T.replace(tzinfo=None)), "no offset")
         no(lambda c: c.keys.update({"key1.tap": ("activate", "Tick this one off")}), "label")

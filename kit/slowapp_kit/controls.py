@@ -10,7 +10,7 @@ board swaps in place as its keys change their values, without the app running on
 Everything the hub checks at ingest is checked here first, so a mistake fails the app's tests:
 the exact variant set for each kind, every variant exactly its rect's size and in the feed's inks,
 ids, focus and keys, and on a 540 x 960 board, that no control lands in the board's own areas
-(its key labels, their lane and the app strip). `screens(card, surface)` composes the card with
+(its key labels, their lane, the app strip and the QR code to the app's page). `screens(card, surface)` composes the card with
 each variant in turn, for a test that looks at every state a board can show.
 """
 import re
@@ -32,8 +32,10 @@ MAX_CONTROLS, MAX_VARIANTS, MAX_VALUE, MAX_APPLIED, MAX_LABEL = 16, 64, 15, 256,
 NAME_RE = re.compile(r"^(?!\.)[A-Za-z0-9_.-]{1,48}$")
 
 # The board's own areas on a 540 x 960 portrait glass, [x, y, w, h] (sb_proto::schedule::areas):
-# the key labels, the lane their lines run down to the keys, and the app strip.
-BOARD_AREAS = {"labels": (336, 16, 144, 120), "lane": (480, 0, 60, 340), "strip": (0, 900, 540, 60)}
+# the key labels, the lane their lines run down to the keys, the app strip, and a QR code to the
+# app's page (on a card with controls). Draw nothing in them either: the board covers them.
+BOARD_AREAS = {"labels": (336, 16, 144, 120), "lane": (480, 0, 60, 340), "strip": (0, 900, 540, 60),
+               "qr": (16, 16, 120, 120)}
 
 
 @dataclass
