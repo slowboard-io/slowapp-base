@@ -17,6 +17,7 @@ from PIL import Image
 from . import manifest as mf
 from .context import DOC_NAME_RE
 from .errors import ContractError
+from . import controls as _controls
 from .inks import InkError, encode_png
 
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}$")
@@ -74,6 +75,7 @@ class Card:
     kind: str = ""                 # "" -> home for the first card, detail for the rest
     keep_s: int | None = None
     extra: dict = field(default_factory=dict)
+    controls: object = None        # a controls.Controls (the controls grant), or None
 
 
 def write_feed(ctx, feed, cards, valid_from=None, valid_until=None):
@@ -105,6 +107,10 @@ def write_feed(ctx, feed, cards, valid_from=None, valid_until=None):
         entry = dict(c.extra, id=c.id, title=c.title, peek=c.peek, kind=kind)
         if c.keep_s is not None:
             entry["keep_s"] = int(c.keep_s)
+        if c.controls is not None:
+            if not ctx.manifest.get("app", {}).get("controls"):
+                raise ContractError(f"{feed}/{c.id}: controls need controls = true in slowapp.toml (the controls grant)")
+            entry["controls"] = _controls.write(c.controls, c.id, surface, root, atomic_write)
         deck.append(entry)
     vf = valid_from or ctx.now
     vu = valid_until or (ctx.now + timedelta(hours=1))

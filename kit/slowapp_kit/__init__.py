@@ -69,6 +69,7 @@ from .errors import (EXIT_CONTRACT, EXIT_NEEDS_CONFIG, EXIT_OK, EXIT_TRANSIENT, 
 from .inks import (BLACK, GREYS, INK_SETS, INKS, PALETTE, RED, WHITE, YELLOW, InkError, blob_id,  # noqa: E402
                    check_inks, check_png, encode_png, grey, pack_rows, snap_g16, to_indexed)
 from .jobs import JOBS, execute, job, main, run_in_child  # noqa: E402
+from .controls import Control, Controls  # noqa: E402
 from .output import Card, atomic_write  # noqa: E402
 from .serve import route  # noqa: E402
 
@@ -112,7 +113,7 @@ def token(name, optional=None, ctx=None):
 
 __all__ = [
     "BLACK", "WHITE", "YELLOW", "RED", "INKS", "PALETTE", "GREYS", "INK_SETS", "Card", "Context",
-    "Device", "Surface", "JOBS", "grey", "snap_g16",
+    "Control", "Controls", "Device", "Surface", "JOBS", "grey", "snap_g16",
     "EXIT_OK", "EXIT_UNCHANGED", "EXIT_TRANSIENT", "EXIT_NEEDS_CONFIG", "EXIT_CONTRACT",
     "ContractError", "InkError", "JobExit", "NeedsConfig", "Transient", "Unchanged",
     "atomic_write", "blob_id", "check_inks", "check_png", "encode_png", "execute", "font", "job",

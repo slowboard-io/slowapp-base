@@ -64,6 +64,7 @@ tests/             unit tests, run inside the base image
 | `exports` | names | P4 transitional only (R3): files under `/export` other apps may import. |
 | `imports` | `app:export` | P4 transitional only: mounted read-only at `/imports/<app>/`. |
 | `prompts` | bool | The prompts grant: may write `/out/prompts.json`. Needs a feed named `prompts`. |
+| `controls` | bool | The controls grant: cards may carry controls (slowboard `docs/CONTROLS.md`), written with `Card(..., controls=Controls(...))`. |
 | `blurb` | string | Catalog: one line for the shelf, 1–100 characters. |
 | `about` | string | Catalog: a short paragraph for the app's page, 1–800 characters. |
 | `ink` | `black` \| `white` \| `yellow` \| `red` | Catalog: the ink of the app's disk. |
